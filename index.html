@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<!--
+FREEHU setup (free Spark plan, no card)
+1. console.firebase.google.com > Add project.
+2. Authentication > turn on Google and Anonymous. Authentication > Settings > Authorized domains > add your domain.
+3. Firestore Database > Create > Rules > paste (replaces any older rules, then Publish):
+   rules_version = '2';
+   service cloud.firestore { match /databases/{db}/documents {
+     match /users/{u} { allow read, write: if request.auth != null && request.auth.uid == u; }
+     match /usernames/{n} { allow get: if request.auth != null;
+       allow create: if request.auth != null && request.resource.data.uid == request.auth.uid;
+       allow delete: if request.auth != null && resource.data.uid == request.auth.uid; }
+     match /groups/{g} {
+       // get only: nobody can list or scan groups, you need the 6-letter code
+       allow get: if request.auth != null;
+       allow create: if request.auth != null && request.resource.data.members == [request.auth.uid]
+         && request.resource.data.owner == request.auth.uid;
+       allow update: if request.auth != null && (
+         // joining: add yourself (max 30) and write only your own entry
+         ( !(request.auth.uid in resource.data.members)
+           && request.auth.uid in request.resource.data.members
+           && request.resource.data.members.size() == resource.data.members.size() + 1
+           && request.resource.data.members.size() <= 30
+           && request.resource.data.members.hasAll(resource.data.members)
+           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members','m'])
+           && request.resource.data.m.diff(resource.data.m).affectedKeys().hasOnly([request.auth.uid]) )
+         // members: edit only your own entry, plans, or remove yourself
+         || ( request.auth.uid in resource.data.members
+           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members','m','p'])
+           && request.resource.data.m.diff(resource.data.m).affectedKeys().hasOnly([request.auth.uid])
+           && ( request.resource.data.members == resource.data.members
+             || ( request.resource.data.members.size() == resource.data.members.size() - 1
+               && !(request.auth.uid in request.resource.data.members)
+               && resource.data.members.hasAll(request.resource.data.members) ) ) )
+         // owner only: set the group time zone
+         || ( request.auth.uid == resource.data.owner
+           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['gz']) ) );
+       allow delete: if false; } } }
+4. Project settings > Your apps > Web > copy config into FIREBASE_CONFIG below.
+4b. OPTIONAL analytics: add your Web app's measurementId ("G-XXXX") to FIREBASE_CONFIG and enable Google Analytics for the project.
+5. OPTIONAL, Google Calendar import: in Google Cloud Console (same project) enable "Google Calendar API", and on the OAuth consent screen add the scope
+   .../auth/calendar.freebusy (it only reads busy/free, never event details).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f6f6fa" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#0d0d12" media="(prefers-color-scheme: dark)"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Freehu – free, who?</title>
+<meta name="description" content="Freehu: free, who? See when your people are free.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='15' fill='%235b4bdb'/%3E%3Ccircle cx='32' cy='32' r='14' fill='none' stroke='white' stroke-width='5.5' stroke-linecap='round' stroke-dasharray='68 20'/%3E%3Ccircle cx='32' cy='32' r='4.6' fill='white'/%3E%3Ccircle cx='43.2' cy='23.6' r='4.4' fill='%2322b35e' stroke='%235b4bdb' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+/* ===== Freehu design system: one layer, one accent, flat surfaces ===== */
+:root{--bg:#f6f6fa;--card:#fff;--ink:#16161f;--mut:#6a6a7a;--line:#e6e6ee;--fill:#f0f0f6;--acc:#5b4bdb;--accsoft:#5b4bdb14;--ok:#22b35e;--okink:#0f7a3d;--okbg:#22b35e1f;--bad:#e5484d;--r:16px;color-scheme:light}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0d0d12;--card:#17171f;--ink:#f4f4f8;--mut:#9a9aab;--line:#272732;--fill:#20202a;--acc:#8b7dff;--accsoft:#8b7dff1f;--ok:#34d17a;--okink:#6ff0a0;--okbg:#34d17a24;color-scheme:dark}}
+:root[data-theme=dark]{--bg:#0d0d12;--card:#17171f;--ink:#f4f4f8;--mut:#9a9aab;--line:#272732;--fill:#20202a;--acc:#8b7dff;--accsoft:#8b7dff1f;--ok:#34d17a;--okink:#6ff0a0;--okbg:#34d17a24;color-scheme:dark}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:16px/1.5 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;padding-top:env(safe-area-inset-top,0)}
+button{font:inherit;color:inherit;cursor:pointer;border:0;background:none;padding:0}button:active{opacity:.7}
+input,select{font:inherit;color:var(--ink);width:100%;min-height:48px;padding:0 14px;border-radius:12px;border:1px solid var(--line);background:var(--card)}
+input::placeholder{color:var(--mut)}
+:is(button,input,select,a):focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+h1{font-size:1.75rem;line-height:1.15;font-weight:700;letter-spacing:-.025em;margin:4px 0 4px}
+h2{font-size:1.05rem;font-weight:650;letter-spacing:-.01em;margin:24px 0 10px}
+p{margin:0 0 12px}.mut,small{color:var(--mut)}small{font-size:.85rem}.sub{margin:0 0 16px;color:var(--mut);font-size:.95rem}
+label.l{display:block;font-weight:600;font-size:.85rem;margin:16px 0 6px}
+.lnk{color:var(--acc);font-weight:700;letter-spacing:.12em}
+/* layout */
+main{max-width:720px;margin:0 auto;padding:16px 16px calc(96px + env(safe-area-inset-bottom,0))}
+main.solo{max-width:480px;padding:calc(6vh + env(safe-area-inset-top,0)) 20px 40px}
+.top{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--bg);border-bottom:1px solid var(--line)}
+.top .brand{flex:1}.brand{display:flex;gap:10px;align-items:center;font-weight:700;font-size:1.2rem;letter-spacing:-.03em}.mark{flex:none;display:block;stroke:none;fill:none}
+.ham{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;background:var(--fill)}
+.gsw{min-height:40px;padding:0 14px;border-radius:99px;background:var(--fill);font-weight:600;font-size:.9rem;max-width:44vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bottom{position:fixed;left:0;right:0;bottom:0;z-index:20;display:flex;background:var(--card);border-top:1px solid var(--line);padding:6px 8px calc(6px + env(safe-area-inset-bottom,0))}
+.bottom button{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;min-height:52px;justify-content:center;font-size:.7rem;font-weight:600;color:var(--mut)}
+.bottom button span{display:flex}.bottom button.on{color:var(--acc)}
+.side{display:none}
+/* surfaces */
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px;margin-bottom:12px}
+.card.lst{padding:4px 16px}.lrow{display:flex;align-items:center;gap:12px;padding:12px 0}.lrow+.lrow{border-top:1px solid var(--line)}
+.banner{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;background:var(--accsoft);border-radius:var(--r);padding:12px 14px;margin-bottom:12px}
+.hero{background:var(--acc);color:#fff;border:0;padding:20px}.hero .big{font-size:3rem;font-weight:800;line-height:1;letter-spacing:-.04em}.hero .big span{font-size:1rem;font-weight:600;margin-left:8px;opacity:.9}.hero small{color:#ffffffd9}
+.hero .av{border:2px solid var(--acc);margin-right:-8px}
+.empty{text-align:center;padding:28px 14px}.card.empty b{font-size:1.05rem}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.nw{flex-wrap:nowrap}.sp{justify-content:space-between}.f1{flex:1;min-width:0}
+/* controls */
+.btn{min-height:48px;padding:0 20px;border-radius:12px;background:var(--acc);color:#fff;font-weight:650;display:inline-flex;align-items:center;justify-content:center;gap:8px}
+.btn.g{background:var(--accsoft);color:var(--acc)}.btn.d{background:none;color:var(--bad)}.btn.s{min-height:36px;padding:0 14px;font-size:.9rem;border-radius:99px}.btn.w{width:100%}
+.btn.fr{background:var(--ok);color:#06210f}.btn.bz{background:var(--mut);color:#fff}
+.chip{min-height:38px;padding:0 14px;border-radius:99px;background:var(--fill);font-weight:600;font-size:.9rem;white-space:nowrap}.chip.on{background:var(--acc);color:#fff}
+.seg{display:inline-flex;background:var(--fill);border-radius:12px;padding:3px;gap:2px}.seg button{min-height:38px;padding:0 14px;border-radius:9px;font-weight:600;font-size:.9rem;color:var(--mut)}
+.seg button.on{background:var(--card);color:var(--ink);box-shadow:0 1px 3px #0002}.seg.w{display:flex;width:100%}.seg.w button{flex:1;min-height:44px}
+.seg.w button.on.fr{background:var(--ok);color:#06210f}.seg.w button.on.bz{background:var(--mut);color:#fff}
+.x{width:36px;height:36px;border-radius:50%;background:var(--fill);flex:none}
+.icb{width:40px;height:40px;border-radius:50%;background:var(--accsoft);color:var(--acc);display:grid;place-items:center;flex:none}
+.set{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:14px 0 4px}
+.dur{gap:8px}.notechip{max-width:100%;overflow:hidden;text-overflow:ellipsis;margin-bottom:4px}
+/* people */
+.av{position:relative;display:inline-grid;place-items:center;width:40px;height:40px;border-radius:50%;font-size:1.25rem;flex:none}
+.av.r{box-shadow:0 0 0 2px var(--card),0 0 0 4px var(--ok)}.av.ol:after{content:"";position:absolute;right:-1px;bottom:-1px;width:11px;height:11px;border-radius:50%;background:var(--ok);border:2px solid var(--card)}
+.stack{display:flex;flex:none}.stack .av{width:34px;height:34px;font-size:1.05rem;margin-left:-10px;box-shadow:0 0 0 2px var(--card)}.stack .av:first-child{margin-left:0}
+.person{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line);width:100%;text-align:left}.person:last-child{border:0}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:.78rem;font-weight:650;padding:4px 10px;border-radius:99px;background:var(--fill);color:var(--mut);white-space:nowrap}
+.pill:before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}.pill.free{background:var(--okbg);color:var(--okink)}
+/* group rail + hub list */
+.rail{display:flex;gap:8px;overflow-x:auto;margin:0 -16px 14px;padding:2px 16px 6px;scrollbar-width:none}.rail::-webkit-scrollbar{display:none}
+.rc{flex:none;display:inline-flex;align-items:center;gap:7px;min-height:40px;padding:0 14px;border-radius:99px;font-weight:600;font-size:.92rem;background:var(--card);border:1px solid var(--line);white-space:nowrap}
+.rc i{font-style:normal;min-width:20px;height:20px;padding:0 6px;border-radius:99px;display:inline-grid;place-items:center;font-size:.75rem;font-weight:700;background:var(--okbg);color:var(--okink)}
+.rc.on{background:var(--acc);border-color:var(--acc);color:#fff}.rc.on i{background:#ffffff33;color:#fff}.rc.add{color:var(--acc);border-style:dashed}
+.chats{padding:0;overflow:hidden}.crow{display:flex;align-items:center;gap:14px;width:100%;text-align:left;padding:14px 16px;min-height:72px}.crow+.crow{border-top:1px solid var(--line)}
+.gi{width:48px;height:48px;border-radius:14px;display:grid;place-items:center;font-size:1.5rem;background:var(--fill);flex:none}.gi.sm{width:38px;height:38px;font-size:1.2rem;border-radius:11px}
+.crow.live .gi{box-shadow:0 0 0 2px var(--ok)}.crow .cb{min-width:0;display:flex;flex-direction:column}.crow b,.crow small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.badge{font-style:normal;min-width:24px;height:24px;padding:0 8px;border-radius:99px;display:inline-grid;place-items:center;background:var(--ok);color:#06210f;font-weight:750;font-size:.82rem}
+.around{margin:0 -16px}.around>.row{padding:4px 16px 10px!important}.ar{flex:none;text-align:center;display:flex;flex-direction:column;align-items:center;gap:6px;width:60px}
+.hubact{gap:10px;margin-bottom:12px}.hubact .btn{flex:1}
+.mystat .av{width:44px;height:44px}
+.nowbar.hot{background:var(--okbg);border-color:var(--ok)}
+.fab{position:fixed;right:16px;bottom:calc(84px + env(safe-area-inset-bottom,0));z-index:25;display:inline-flex;align-items:center;gap:6px;height:52px;padding:0 20px 0 16px;border-radius:26px;background:var(--acc);color:#fff;font-weight:700;box-shadow:0 8px 20px #0003}.fab span{font-size:1.4rem;line-height:1}
+/* group forms (join / create) */
+.gf{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px;margin-bottom:12px}
+.gf .seg{margin-bottom:14px}.gf .gh{margin:0 0 12px;font-size:.95rem}.gf .btn{margin-top:12px}
+.codein{min-height:64px;font-size:1.9rem;font-weight:800;letter-spacing:.3em;text-align:center;text-transform:uppercase;padding-left:.3em}
+.gpick{display:flex;gap:10px;align-items:center}.gbig{width:52px;height:52px;border-radius:14px;background:var(--fill);display:grid;place-items:center;font-size:1.6rem;flex:none}
+.egrid{margin-top:12px;gap:6px}.egrid .chip{width:42px;min-height:42px;padding:0;font-size:1.2rem}
+.code{font-size:1.9rem;font-weight:800;letter-spacing:.28em;margin-top:6px;padding-left:.28em}
+/* get started, ping, plans */
+.start .srow{display:flex;align-items:center;gap:12px;width:100%;text-align:left;min-height:48px;font-weight:600;border-top:1px solid var(--line)}.start .srow:first-of-type{border:0}
+.srow i{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-style:normal;font-size:.8rem;font-weight:800;box-shadow:inset 0 0 0 2px var(--acc);flex:none}
+.srow.done{color:var(--mut);text-decoration:line-through}.srow.done i{background:var(--ok);box-shadow:none;color:#06210f}.srow:disabled:not(.done){opacity:.45}
+.pkgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px}.pc{display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 4px;border-radius:14px;background:var(--card);border:1px solid var(--line);font-weight:600;font-size:.85rem}.pc span{font-size:1.8rem;line-height:1}
+.pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;align-items:start}.pgrid .card{margin:0}
+.pingc{border-color:var(--acc)}.pingc.mine{display:flex;align-items:center;gap:12px;border-color:var(--line)}
+.pe{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;font-size:1.5rem;background:var(--fill);flex:none}
+/* availability grid + calendar */
+.grid{display:grid;grid-template-columns:64px repeat(4,1fr);gap:6px;align-items:center}.grid small{text-align:center;font-weight:600;font-size:.76rem}
+.cell{min-height:44px;border-radius:10px;background:var(--fill);display:grid;place-items:center}
+.cell.full{background:var(--ok)}.cell.full:after{content:"✓";font-weight:800;color:#06210f}
+.cell.part{background:repeating-linear-gradient(135deg,var(--okbg) 0 6px,transparent 6px 12px);box-shadow:inset 0 0 0 1.5px var(--ok)}
+.dl{display:flex;align-items:center;justify-content:space-between;min-height:44px;font-weight:650;font-size:.92rem;white-space:nowrap;text-align:left}.dl:after{content:"›";color:var(--mut);padding-right:4px}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-top:12px}.cal small{text-align:center}
+.dc{min-height:44px;border-radius:10px;font-weight:600;position:relative;background:var(--fill)}.dc:disabled{opacity:.3;background:none}.dc i{position:absolute;top:5px;right:6px;width:6px;height:6px;border-radius:50%;background:var(--acc)}
+.hg{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.hb{min-height:42px;border-radius:10px;background:var(--fill);font-weight:600;font-size:.88rem}.hb.on{background:var(--ok);color:#06210f}
+.tzg{margin-top:10px}.tzr{display:grid;grid-template-columns:58px 1fr;align-items:center;gap:8px;margin-top:6px}.tzb{display:grid;grid-template-columns:repeat(24,1fr);gap:2px}.tzb i{height:18px;border-radius:4px;background:var(--fill)}.tzb i.aw{background:var(--accsoft)}.tzb i.ov{background:var(--ok)}.tzax{display:flex;justify-content:space-between}.tzax small{font-size:.65rem}
+/* insights */
+.kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:14px 0}.kpi{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:14px}.kpi b{display:block;font-size:1.4rem}
+.heatw{overflow-x:auto}.heat{min-width:440px;display:grid;grid-template-columns:34px repeat(16,minmax(18px,1fr));gap:3px;align-items:center;margin-top:12px}.heat small{font-size:.62rem;text-align:center}.hc{min-height:24px;border-radius:5px}
+.dbars{display:flex;gap:8px;height:150px;margin-top:12px}.db{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px}.db .tr{flex:1;width:100%;display:flex;align-items:flex-end}.db i{display:block;width:100%;border-radius:6px 6px 3px 3px;background:var(--accsoft);box-shadow:inset 0 0 0 1.5px var(--acc)}
+.bar{height:6px;border-radius:9px;background:var(--fill);margin-top:6px}.bar i{display:block;height:100%;border-radius:9px;background:var(--ok)}
+/* onboarding */
+.dots{display:flex;gap:6px;justify-content:center;margin:16px 0}.dots i{width:8px;height:8px;border-radius:50%;background:var(--line)}.dots i.on{background:var(--acc);width:24px;border-radius:9px}
+.big-chip{display:flex;align-items:center;gap:12px;width:100%;min-height:64px;padding:0 16px;border-radius:14px;background:var(--card);border:2px solid var(--line);font-weight:650;text-align:left;margin-bottom:10px}.big-chip small{display:block;font-weight:500}.big-chip.on{border-color:var(--acc);background:var(--accsoft)}.big-chip .tick{margin-left:auto;color:var(--acc)}
+/* overlays */
+.scrim{position:fixed;inset:0;background:#0008;z-index:40;display:flex;align-items:flex-end;justify-content:center}
+.sheet{background:var(--bg);width:100%;max-width:520px;border-radius:20px 20px 0 0;padding:18px 16px calc(20px + env(safe-area-inset-bottom,0));max-height:92vh;overflow:auto;animation:rise .25s ease}
+.sheet:before{content:"";display:block;width:36px;height:4px;border-radius:9px;background:var(--line);margin:-8px auto 12px}
+.drawer{position:fixed;top:0;bottom:0;left:0;width:84%;max-width:320px;background:var(--card);padding:calc(20px + env(safe-area-inset-top,0)) 12px 20px;display:flex;flex-direction:column;gap:2px;overflow:auto}
+.drawer .m{text-align:left;padding:0 12px;min-height:46px;border-radius:10px;font-weight:550;display:flex;gap:12px;align-items:center;width:100%}.drawer .m.on{background:var(--accsoft);color:var(--acc);font-weight:700}.drawer hr{border:0;border-top:1px solid var(--line);width:100%;margin:10px 0}.drawer .m span{display:flex}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(88px + env(safe-area-inset-bottom,0));background:var(--ink);color:var(--bg);padding:11px 18px;border-radius:12px;z-index:60;font-weight:600;font-size:.92rem;max-width:90%;width:max-content;text-align:center;pointer-events:none}
+@keyframes rise{from{transform:translateY(16px);opacity:0}}
+/* mobile group page: people first */
+@media(max-width:899px){.cols.c3{display:flex;flex-direction:column}.cols.c3>div{display:contents}.cols.c3>div>*{order:5}.cols.c3>div>.frcard{order:1}.cols.c3>div>.stc{order:2}.cols.c3>div>.hero{display:none}.card.strip{display:none}.cols>div{min-width:0}}
+/* laptop */
+@media(min-width:900px){
+ .top,.bottom{display:none}
+ .side{display:flex;flex-direction:column;gap:2px;position:fixed;left:0;top:0;bottom:0;width:248px;padding:24px 12px 14px;border-right:1px solid var(--line);background:var(--card);overflow:auto}
+ .side .nv{display:flex;align-items:center;gap:12px;min-height:40px;padding:0 12px;border-radius:10px;font-weight:550;color:var(--mut);text-align:left;width:100%}
+ .side .nv span{display:flex}.side .nv.on{background:var(--accsoft);color:var(--acc);font-weight:650}.side .nv:hover{background:var(--fill)}.side .nv svg{width:20px;height:20px}
+ .side>small{margin:20px 12px 6px;text-transform:uppercase;letter-spacing:.06em;font-weight:650;font-size:.7rem}
+ .sfoot{margin-top:auto;padding-top:12px;border-top:1px solid var(--line)}.sfoot .row.nw{width:100%;padding:8px;border-radius:10px;text-align:left}.sfoot .row:hover{background:var(--fill)}.sfoot .kb{display:none}
+ main{margin-left:248px;max-width:none;padding:32px 40px 56px}main>div{max-width:1120px;margin:0 auto}
+ .rail{margin:0 0 16px;padding:0;flex-wrap:wrap;overflow:visible}
+ .cols{display:grid;grid-template-columns:1fr 1fr;gap:0 20px;align-items:start}.cols.c3>div{min-width:0}
+ .insg{display:grid;grid-template-columns:1fr 1fr;gap:0 20px;align-items:start}.kpis{grid-template-columns:repeat(4,1fr)}
+ .scrim{align-items:center}.sheet{border-radius:20px;max-width:560px}.sheet:before{display:none}.toast{bottom:28px}.fab{right:32px;bottom:32px}.hg{grid-template-columns:repeat(6,1fr)}
+ .chats{max-width:640px}
+}
+@media(min-width:1280px){.cols.c3{grid-template-columns:1fr 1fr 1fr}}
+@media(min-width:900px) and (max-width:1279px){.cols.c3>div:nth-child(3){grid-column:1/-1}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+/* mobile polish pass */
+input{min-width:0}.fab{display:none!important}
+.banner{padding:10px 12px;font-size:.88rem;line-height:1.35;gap:8px}.banner .btn{min-height:34px;padding:0 12px;font-size:.85rem}
+.codein::placeholder{opacity:.28}
+.lrow b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.lrow .btn.d{padding:0 8px}
+.hubhead h1{font-size:1.6rem}.hubtop{margin:18px 0 8px}.hubtop h2{margin:0}
+@media(max-width:899px){h1{font-size:1.5rem}.cols:not(.c3){display:flex;flex-direction:column}.cols:not(.c3)>div{min-width:0}.cols:not(.c3)>div:nth-child(2){order:-1}.card{padding:14px}.mystat .seg button{min-height:40px}}
+.chats.card{padding:0}small{line-height:1.35}
+@media(min-width:900px){.card.strip{display:none}}.hero .big span{letter-spacing:0}
+/* v3: single "free now" card, calmer status, laptop grid */
+.seg.w button.on.bz{background:var(--card);color:var(--ink)}
+.mystat.is-free{background:var(--okbg);border-color:var(--ok)}
+.topcards{display:grid;gap:12px;margin-bottom:12px}.topcards>.card,.topcards>.banner{margin:0}.nowbar[data-a=freelist] .f1{cursor:pointer}
+.row:has(>[data-a=igrp]){flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}.row:has(>[data-a=igrp])::-webkit-scrollbar{display:none}
+@media(min-width:900px){.topcards:has(>:nth-child(2)){grid-template-columns:1fr 1fr}.topcards .banner{height:100%}.cols.c3>div>.card:first-child{margin-top:0}}
+/* ===== v4: 2026 polish ===== */
+:root{--glow:#5b4bdb1f;--sh1:0 1px 2px #14142b0a,0 10px 28px -14px #14142b1f}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--glow:#8b7dff26;--sh1:0 1px 2px #0006,0 10px 28px -14px #000c}}
+:root[data-theme=dark]{--glow:#8b7dff26;--sh1:0 1px 2px #0006,0 10px 28px -14px #000c}
+body{background:radial-gradient(90% 38vh at 50% -8%,var(--glow),transparent 72%),var(--bg);background-repeat:no-repeat;font-variant-numeric:tabular-nums;font-optical-sizing:auto}
+h1{font-weight:750;letter-spacing:-.032em}
+main h2{font-size:.76rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--mut);margin:26px 0 10px}
+.card,.gf,.kpi{border-radius:20px;border-color:color-mix(in srgb,var(--line) 70%,transparent);box-shadow:var(--sh1)}
+.btn{border-radius:14px;font-weight:650;transition:transform .15s,opacity .15s}.btn:active{transform:scale(.97);opacity:1}
+.btn.s{border-radius:99px}
+.chip,.rc,.seg,.seg button{transition:background .2s,color .2s}
+/* top + floating tab bar */
+.top{background:color-mix(in srgb,var(--bg) 78%,transparent);-webkit-backdrop-filter:blur(18px) saturate(170%);backdrop-filter:blur(18px) saturate(170%);border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent)}
+.bottom{left:12px;right:12px;bottom:calc(10px + env(safe-area-inset-bottom,0));border:1px solid color-mix(in srgb,var(--line) 70%,transparent);border-radius:26px;padding:5px;background:color-mix(in srgb,var(--card) 82%,transparent);-webkit-backdrop-filter:blur(20px) saturate(180%);backdrop-filter:blur(20px) saturate(180%);box-shadow:0 12px 32px -10px #14142b40}
+.bottom button{border-radius:21px;min-height:50px}.bottom button.on{background:var(--accsoft);color:var(--acc)}
+main{padding-bottom:calc(110px + env(safe-area-inset-bottom,0))}.toast{bottom:calc(98px + env(safe-area-inset-bottom,0))}
+/* hero "now" card: the one expressive element */
+.now{position:relative;overflow:hidden;border:0;color:#fff;padding:18px;background:linear-gradient(140deg,#4538c9 0%,#6455ee 55%,#8c68f6 100%);box-shadow:0 18px 36px -16px #5b4bdbaa}
+.now:before{content:"";position:absolute;right:-70px;top:-80px;width:230px;height:230px;border-radius:50%;background:radial-gradient(circle,#ffffff30,transparent 68%)}
+.now>*{position:relative}.now-top{position:relative;cursor:pointer;min-height:84px}
+.livedot{display:inline-flex;align-items:center;gap:8px;font-size:.7rem;font-weight:750;letter-spacing:.09em;text-transform:uppercase;opacity:.92}
+.livedot:before{content:"";width:8px;height:8px;border-radius:50%;background:#5cf09a;animation:pulse 2s ease-out infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 #5cf09aaa}70%,100%{box-shadow:0 0 0 9px #5cf09a00}}
+.now-n{font-size:2.7rem;font-weight:800;letter-spacing:-.045em;line-height:1.05;margin-top:8px}.now-n em{font-style:normal;font-size:1.05rem;font-weight:600;letter-spacing:0;margin-left:8px;opacity:.9}
+.now-sub{margin-top:4px;opacity:.9;font-size:.95rem}
+.now .stack{position:absolute;right:0;top:0}.now .stack .av{width:36px;height:36px;box-shadow:0 0 0 2px #6256e8}
+.now-act{display:flex;gap:8px;margin-top:16px}.now-act .btn{flex:1;min-height:44px}
+.now .btn{background:#fff;color:#3b30b5}.now .btn.g{background:#ffffff2b;color:#fff}
+.now:not(.live){background:var(--card);color:var(--ink);border:1px solid var(--line);box-shadow:var(--sh1)}.now:not(.live):before{display:none}
+.now:not(.live) .livedot:before{background:var(--mut);animation:none}.now:not(.live) .now-n{font-size:1.6rem}
+.now:not(.live) .btn{background:var(--acc);color:#fff}.now:not(.live) .btn.g{background:var(--accsoft);color:var(--acc)}
+.nudge{background:var(--card);box-shadow:inset 3px 0 0 var(--ok),var(--sh1);border-radius:16px}
+.topcards .nudge{margin:0}
+/* group tiles, RSVP states */
+.gi{background:hsl(var(--h,250) 85% 93%)}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]) .gi{background:hsl(var(--h,250) 35% 22%)}}
+:root[data-theme=dark] .gi{background:hsl(var(--h,250) 35% 22%)}
+.chip.r-in.on{background:var(--ok);color:#06210f}.chip.r-maybe.on{background:#f5b53d;color:#3a2600}.chip.r-no.on{background:var(--bad);color:#fff}
+.mystat.is-free{background:linear-gradient(180deg,var(--okbg),var(--card));}
+.rc.on,.chip.on{box-shadow:0 6px 14px -8px var(--acc)}
+.sheet{border-radius:26px 26px 0 0}
+/* laptop: balanced two-column group page */
+@media(min-width:900px){
+ .topcards:has(>:nth-child(2)){grid-template-columns:1.5fr 1fr}.topcards .nudge{display:flex;align-items:center;height:100%;padding:16px}
+ main>div:has(.hubhead){max-width:720px}.chats{max-width:none}
+ .side{background:color-mix(in srgb,var(--card) 70%,var(--bg))}
+ .side .nv.on{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--acc) 22%,transparent)}
+}
+@media(min-width:1100px){
+ .cols.c3{grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:0 20px}
+ .cols.c3>div:nth-child(2){grid-column:1;grid-row:1}.cols.c3>div:nth-child(3){grid-column:1;grid-row:2}.cols.c3>div:nth-child(1){grid-column:2;grid-row:1/span 2}
+}
+@media(min-width:900px) and (max-width:1099px){.cols.c3{grid-template-columns:1fr 1fr}.cols.c3>div:nth-child(3){grid-column:1/-1}}
+@media(min-width:900px){.topcards .nudge{flex-direction:column;align-items:flex-start;justify-content:space-between;gap:12px}.topcards .nudge b{font-size:1.05rem;line-height:1.3}.topcards .nudge .btn{align-self:flex-start}}
+
+/* ===== v5: 2026 polish layer ===== */
+:root{--onacc:#fff;--ease:cubic-bezier(.2,.8,.2,1);--hi:0 0 #0000;--sh2:0 2px 4px #14142b0d,0 24px 48px -20px #14142b40}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--onacc:#15123a;--hi:inset 0 1px 0 #ffffff0f}}
+:root[data-theme=dark]{--onacc:#15123a;--hi:inset 0 1px 0 #ffffff0f}
+body{padding-top:0}
+.top{padding-top:calc(8px + env(safe-area-inset-top,0px));top:0}
+.card,.gf,.kpi{box-shadow:var(--hi),var(--sh1);transition:box-shadow .25s var(--ease),transform .25s var(--ease)}
+.btn,.chip.on,.rc.on,.fab{color:var(--onacc)}
+.btn{background-image:linear-gradient(180deg,#ffffff24,#fff0);box-shadow:0 8px 16px -10px var(--acc)}
+.btn.g,.btn.d,.now .btn{box-shadow:none}
+.now:not(.live) .btn{color:var(--onacc)}.now .btn{color:#3b30b5}.now .btn.g{color:#fff}
+.hero{background:linear-gradient(140deg,#4538c9,#6455ee 55%,#8c68f6);color:#fff;box-shadow:0 18px 36px -16px #5b4bdbaa}.hero .av{border-color:#6256e8}
+.btn:active,.chip:active,.rc:active,.cell:active,.hb:active,.dc:active,.seg button:active{transform:scale(.96);opacity:1}
+.chip,.rc,.cell,.hb,.dc,.seg button,.person,.crow{transition:background .2s,color .2s,transform .15s var(--ease),box-shadow .2s}
+h1{font-size:clamp(1.55rem,1.2rem + 1.2vw,2.1rem)}
+.bottom button{font-size:.72rem}.heat small{font-size:.68rem}.tzax small{font-size:.7rem}
+/* banners: compact, tidy wrap */
+.banner{border-radius:16px;align-items:center}.banner .f1{flex:1 1 190px;min-width:0}.banner small{display:block;margin-top:1px}
+/* modal layer */
+.scrim{background:#0a0a1470;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+.sheet{animation:none;border:1px solid var(--line);box-shadow:var(--sh2);outline:0}.drawer{outline:0}
+.scrim.pop{animation:fade .2s ease}.scrim.pop .sheet{animation:rise .32s var(--ease)}.scrim.pop .drawer{animation:slide .3s var(--ease)}
+@keyframes fade{from{opacity:0}}@keyframes slide{from{transform:translateX(-28px);opacity:0}}
+.toast{background:color-mix(in srgb,var(--ink) 94%,transparent);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);box-shadow:var(--sh2);animation:rise .25s var(--ease)}
+.empty.mut{animation:breathe 1.4s ease-in-out infinite}@keyframes breathe{50%{opacity:.45}}
+.cell.full,.hb.on{box-shadow:0 4px 10px -6px var(--ok)}
+/* hover (pointer devices only) */
+@media(hover:hover){
+ .btn:hover{filter:brightness(1.07)}.chip:hover,.rc:hover,.hb:hover,.dc:not(:disabled):hover{filter:brightness(.96)}.cell:hover{transform:scale(1.04)}.seg button:not(.on):hover{color:var(--ink)}
+ .card:not(.now):hover{box-shadow:var(--hi),var(--sh2)}.crow:hover,.lrow:hover{background:var(--fill)}.crow{cursor:pointer}
+ .person:hover{background:var(--fill);box-shadow:-16px 0 0 var(--fill),16px 0 0 var(--fill)}.pc:hover{border-color:var(--acc);transform:translateY(-2px)}
+}
+/* laptop */
+@media(min-width:900px){
+ main>div:has(.hubhead){max-width:1120px}.hubhead h1{font-size:2.2rem}
+ .hubcols{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:0 24px;align-items:start}.hubcols .hubtop{margin-top:0}.hubcols .around{margin:0}.hubcols .around>.row{padding:4px 2px 10px!important}
+ .sfoot .kb{display:flex;flex-direction:column;gap:7px;margin:14px 8px 4px;color:var(--mut);font-size:.74rem}
+ kbd{font:600 .68rem Inter,sans-serif;padding:2px 6px;border-radius:6px;background:var(--fill);border:1px solid var(--line);box-shadow:0 1px 0 var(--line);color:var(--ink)}
+ .side .nv{min-height:42px}.side .nv.on:before{content:"";position:absolute;left:-12px;width:3px;height:20px;border-radius:0 3px 3px 0;background:var(--acc)}.side .nv{position:relative}
+ .hero,.now{min-height:0}
+}
+@media(min-width:900px) and (max-height:700px){.sfoot .kb{display:none}}
+@media(prefers-reduced-motion:reduce){.scrim.pop,.scrim.pop .sheet,.scrim.pop .drawer,.toast,.empty.mut{animation:none!important}}
+.banner{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px 8px}.banner>.f1:only-child,.banner>span:only-child{grid-column:1/-1}.banner .f1{flex:none}
+.lnk2{color:var(--acc);font-weight:650;text-decoration:underline dotted;text-underline-offset:3px}
+.pk{display:flex;gap:6px;overflow-x:auto;padding:2px 0 6px;scrollbar-width:none}.pk::-webkit-scrollbar{display:none}.pk.h{display:grid;grid-template-columns:repeat(4,1fr);overflow:visible}.pk .chip{flex:none;min-height:44px}.pk .dc{line-height:1.2;padding:6px 14px}.pk .dc small{display:block;opacity:.7}
+.vin{animation:vin .24s cubic-bezier(.2,.8,.2,1)}@keyframes vin{from{opacity:0;transform:translateY(8px)}}.ill{display:block;margin:0 auto 10px}
+.wk{display:none}@media(min-width:900px){.wk{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;margin:14px 0}.wd{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px;min-height:120px;display:flex;flex-direction:column;gap:6px}.wd.td{border-color:var(--acc)}.wp{background:var(--accsoft);border-radius:10px;padding:8px;font-size:.85rem}.wp b{display:block}.wn{color:var(--mut)}}
+.sheet .btn.d.f1{background:#e5484d;color:#fff}.sheet .btn.d.f1:active{filter:brightness(.92)}
+.card .ill{width:72px;height:72px;max-width:none;flex:none}.pk{position:relative}
+.row.nw>div:empty{display:none}
+.tzb{width:100%;display:flex;justify-content:space-between;align-items:center;gap:8px;min-height:48px;padding:0 14px;border-radius:14px;background:var(--fill);font:inherit;text-align:left}.tzb i{font-style:normal;opacity:.6}
+.tzl{margin-top:8px;border:1px solid var(--line);border-radius:14px;background:var(--card);overflow:hidden}.tzl>input{width:100%;border:0;border-bottom:1px solid var(--line);border-radius:0;margin:0}.tzo{max-height:210px;overflow-y:auto;position:relative}.tzo button{display:block;width:100%;text-align:left;padding:12px 14px;min-height:44px;font:inherit}.tzo button.on{background:var(--accsoft);font-weight:600}.tzo button[hidden],.tzl[hidden]{display:none}
+.cn{flex-direction:column;align-items:stretch}.cn .btn{text-align:left;justify-content:flex-start;white-space:normal}.f1{min-width:0}
+@media(min-width:1000px){main>div{max-width:1180px;margin:0 auto}.seg.w{max-width:420px}.insg>div:first-child{position:sticky;top:24px;align-self:start}}
+.pk .dc.on small{color:inherit;opacity:.85}
+
+.vt{margin:0 0 14px}.wstrip{display:flex;gap:8px;overflow-x:auto;padding:12px 2px 10px;margin:0 -2px 4px;scroll-snap-type:x proximity}
+.wt{flex:1 0 76px;scroll-snap-align:start;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:10px 4px;border-radius:16px;background:var(--card);border:1.5px solid var(--line);text-align:center;position:relative;min-height:108px}
+.wt small{color:var(--mut);font-size:.72rem;line-height:1.2}.wt b.n{font-size:1.3rem;letter-spacing:-.02em}
+.wt.best{border-color:var(--acc);box-shadow:0 8px 20px -10px var(--acc)}.wt.best::before{content:'Best';position:absolute;top:-10px;background:var(--acc);color:var(--onacc,#fff);font-size:.65rem;font-weight:700;padding:2px 9px;border-radius:99px}
+.wt.all{background:var(--ok);color:#fff;border-color:var(--ok)}.wt.all small{color:#ffffffd9}.wt.off{opacity:.35;pointer-events:none}
+.mcal{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}.mcal .mh{text-align:center;color:var(--mut);font-size:.72rem;font-weight:600}
+.mcal .md{min-height:48px;border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;background:var(--fill);font-weight:700;font-size:.95rem;padding:4px 0}
+.mcal .md small{font-size:.66rem;font-weight:600;opacity:.8;line-height:1}.mcal .md.best{box-shadow:0 0 0 2px var(--acc)}.mcal .md.all{background:var(--ok);color:#fff}.mcal .md.off{opacity:.3;pointer-events:none}.mcal .md.e{visibility:hidden}
+.pgrid{grid-template-columns:repeat(auto-fill,minmax(min(100%,320px),1fr))}
+.rsv{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.rsv .chip{min-height:46px;width:auto;height:auto;aspect-ratio:auto;border-radius:14px;white-space:nowrap;justify-content:center;text-align:center;padding:0 6px}
+.pact{display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap}.pact .sp{margin-left:auto}
+
+.tpls{display:flex;gap:8px;overflow-x:auto;margin:0 -4px 16px;padding:2px 4px;scrollbar-width:none}.tpls::-webkit-scrollbar{display:none}.tpls .chip{flex:none}
+.rsv.psg{background:var(--fill);padding:4px;border-radius:16px;gap:4px}.rsv.psg .chip{background:transparent;box-shadow:none;min-height:44px;border-radius:12px}.rsv.psg .chip.on{box-shadow:0 2px 8px -3px #0003}
+.pact .btn.s{min-height:40px;padding:0 14px;font-size:.85rem}.pact .btn.s.d{background:none;color:var(--bad,#e5484d);padding:0 6px}
+@media(max-width:899px){
+ .hed{padding:16px}.hed .grid{grid-template-columns:48px repeat(4,1fr);gap:6px}.hed .grid small{font-size:.7rem}.hed .cell{min-height:50px;border-radius:12px}
+ .hed .dl{min-height:50px;font-size:.88rem}.hed .dl:after{content:''}
+ .hed [data-a=savehours]{position:sticky;bottom:calc(92px + env(safe-area-inset-bottom,0px));z-index:5;box-shadow:0 10px 24px -10px var(--acc)}
+ .cal{gap:5px}.dc{min-height:42px}
+ main h1{font-size:1.5rem}
+}
+
+.rsum{margin:0 0 10px}.rbar{height:6px;border-radius:99px;background:var(--fill);overflow:hidden;margin-bottom:6px}.rbar i{display:block;height:100%;background:var(--ok);border-radius:99px;transition:width .3s}
+.rlist{display:flex;flex-direction:column;gap:8px;margin:0 0 12px}.rr{display:flex;gap:10px;align-items:flex-start}.rl{flex:none;width:92px;font-size:.85rem;font-weight:600}.rl b{color:var(--mut);font-weight:700;margin-left:2px}
+.rn{display:flex;flex-wrap:wrap;gap:6px;min-width:0}.rp{background:var(--fill);border-radius:99px;padding:3px 10px;font-size:.82rem;font-weight:600;white-space:nowrap}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+/* ===== PASTE YOUR FIREBASE CONFIG HERE ===== */
+/* PUSH (optional): Firebase console > Project settings > Cloud Messaging > Web Push certificates > generate key pair, paste the public key here.
+   Then deploy firebase-messaging-sw.js (site root) and the functions/ folder (see PUSH-SETUP.md). */
+const VAPID_KEY='';
+const FIREBASE_CONFIG={apiKey:"AIzaSyC00gSGeN32ouYoQ99ehuvdE5zVasXVq0o",authDomain:"freehu.firebaseapp.com",projectId:"freehu",storageBucket:"freehu.firebasestorage.app",messagingSenderId:"202412912963",appId:"1:202412912963:web:9fed2b6772ec16b2d87ff6"};
+const V='10.14.1',FU=n=>`https://www.gstatic.com/firebasejs/${V}/firebase-${n}.js`;
+const DN=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],BK=[['Morning',6,12],['Afternoon',12,17],['Evening',17,22],['Night',22,26]];
+const TY=[['Hangout','☕'],['Game night','🎮'],['Food','🍕'],['Trip','✈️'],['Sports','⚽'],['Study','📚'],['Movie','🎬'],['Meeting','💼']];
+const GE=['👥','🏠','🎮','⚽','🎓','💼','🍻','🎵','✈️','🏋️','🍕','🐶'];
+const gh=i=>{let h=0;for(const c of String(i))h=(h*31+c.charCodeAt(0))%997;return Math.round(h*137.5)%360};
+const AVS=['😀','😎','🤓','🥳','🦊','🐼','🐸','🦄','🔥','🌈','🍕','🎧'];
+const TPL=[['Evenings',d=>rng(17,22)],['Weekends',d=>d>=5?rng(6,30):[]],['After work',d=>d<5?rng(18,24):[]],['Mornings',d=>rng(6,12)]];
+const MARK=(sz=32)=>{const k='g'+(MARK.n=(MARK.n||0)+1);return`<svg class="mark" style="width:${sz}px;height:${sz}px" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="${k}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7f7cf7"/><stop offset="1" stop-color="#4b3fd6"/></linearGradient></defs><rect width="64" height="64" rx="14.5" fill="url(#${k})"/><circle cx="32" cy="32" r="14" fill="none" stroke="#fff" stroke-width="5.5" stroke-linecap="round" stroke-dasharray="68 20"/><circle cx="32" cy="32" r="4.6" fill="#fff"/><circle cx="43.2" cy="23.6" r="4.4" fill="#30d158" stroke="#4f43dc" stroke-width="2"/></svg>`};
+const brand=(z=30)=>`<span class="brand">${MARK(z)}<span>Freehu</span></span>`;
+const MAXM=30,MAXG=5,FULL=16777215;
+/* ---- time zones: every person has a real zone (DST aware); everyone sees times in THEIR OWN zone ---- */
+const DEVTZ=(()=>{try{return Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC'}catch(e){return'UTC'}})();
+const _tf={},_zc={};
+const zoff=(tz,ts)=>{if(!tz)return -new Date(ts).getTimezoneOffset();const k=tz+'|'+Math.floor(ts/9e5);let v=_zc[k];if(v!==undefined)return v;let f=_tf[tz];if(!f){try{f=_tf[tz]=new Intl.DateTimeFormat('en-US',{timeZone:tz,hourCycle:'h23',year:'numeric',month:'numeric',day:'numeric',hour:'numeric',minute:'numeric',second:'numeric'})}catch(e){return -new Date(ts).getTimezoneOffset()}}const p={};f.formatToParts(ts).forEach(x=>{p[x.type]=+x.value});v=Math.round((Date.UTC(p.year,p.month-1,p.day,p.hour%24,p.minute,p.second)-Math.floor(ts/1e3)*1e3)/6e4);_zc[k]=v;return v};
+const _okz={},okTz=z=>{if(!z)return null;if(_okz[z]===undefined){try{new Intl.DateTimeFormat('en-US',{timeZone:z});_okz[z]=z}catch(e){_okz[z]=null}}return _okz[z]};
+const myTz=()=>okTz(S.me?.tz)||DEVTZ;
+const lp=(ts,tz)=>{tz=tz||myTz();const L=new Date(ts+zoff(tz,ts)*6e4);return{y:L.getUTCFullYear(),mo:L.getUTCMonth(),d:L.getUTCDate(),h:L.getUTCHours(),mi:L.getUTCMinutes(),wd:(L.getUTCDay()+6)%7,key:L.toISOString().slice(0,10)}};
+const H=ts=>lp(ts).h;
+const gzo=G=>okTz(G&&G.gz)||myTz();
+const dg=(G,t)=>new Date(t).toLocaleDateString([],{weekday:'short',day:'numeric',month:'short',timeZone:gzo(G)});
+const tr=(G,t,l)=>{const z=gzo(G),a=clk(t,z)+' to '+clk(t+l*36e5,z);return z==myTz()?a:a+' '+esc(tzLbl(z))+' · '+clk(t)+' to '+clk(t+l*36e5)+' for you'};
+const gzBtn=G=>{const own=G.owner==S.uid;if(G.gz)return own?`<button class="lnk2" data-a="gzset">🌍 ${esc(tzLbl(G.gz))} time</button>`:`🌍 ${esc(tzLbl(G.gz))} time`;return own?`<button class="lnk2" data-a="gzset">🌍 Set group time zone</button>`:`🕒 ${esc(tzLbl(myTz()))}`};
+const ymd=(y,m,d)=>new Date(Date.UTC(y,m,d)).toISOString().slice(0,10);
+const wall=(y,mo,d,h,tz)=>{tz=tz||myTz();const g=Date.UTC(y,mo,d,h);let t=g-zoff(tz,g)*6e4;t=g-zoff(tz,t)*6e4;return t};
+const clk=(ts,tz)=>{const a=lp(ts,tz);return fmt(a.h).replace(/^(\d+)/,x=>a.mi?x+':'+String(a.mi).padStart(2,'0'):x)};
+const tzLbl=tz=>String(tz||'').split('/').pop().replace(/_/g,' ');
+const dfs=tz=>{const n=Date.now(),d=(zoff(tz,n)-zoff(myTz(),n))/60;return d==0?'same time as you':(d>0?'+':'−')+Math.abs(d)+'h from you'};
+const tzTag=m=>m.tz&&m.tz!=myTz()?' · 🕒 '+clk(Date.now(),m.tz)+' there'+(lateFor(m)?' 🌙':''):'';
+const vfree=(m,d,h)=>{if(!m.tz||m.tz==myTz())return bits(m.a,d,h);const t=lp(Date.now()),k=new Date(Date.UTC(t.y,t.mo,t.d+((d-t.wd+7)%7))),s=slotOf(m,wall(k.getUTCFullYear(),k.getUTCMonth(),k.getUTCDate(),h));return bits(m.a,s.d,s.h)};
+
+const winTxt=m=>{const t0=Math.floor(Date.now()/36e5)*36e5,r=[];let st=null;for(let i=0;i<=24;i++){const t=t0+i*36e5,f=i<24&&isFree(m,t);if(f&&st===null)st=t;if(!f&&st!==null){r.push(clk(st)+'–'+clk(t));st=null}}
+return r.length?'Free in your time: '+r.slice(0,3).join(', ')+(r.length>3?'…':''):'Not free in the next 24h'};
+const lateFor=m=>m.tz&&m.tz!=myTz()&&(h=>h>=23||h<7)(lp(Date.now(),m.tz).h);
+let _tzo;const tzOpts=cur=>(_tzo||(_tzo=(()=>{let l=[];try{l=Intl.supportedValuesOf('timeZone').slice()}catch(e){}if(!l.length)l=['Pacific/Honolulu','America/Anchorage','America/Los_Angeles','America/Denver','America/Chicago','America/New_York','America/Sao_Paulo','Atlantic/Azores','Europe/London','Europe/Paris','Europe/Athens','Europe/Moscow','Asia/Dubai','Asia/Karachi','Asia/Dhaka','Asia/Bangkok','Asia/Shanghai','Asia/Tokyo','Australia/Sydney','Pacific/Auckland'];['UTC',DEVTZ].forEach(z=>{if(!l.includes(z))l.push(z)});const n=Date.now();return l.map(z=>{const o=zoff(z,n),a=Math.abs(o);return[z,o,'UTC'+(o<0?'−':'+')+String(Math.floor(a/60)).padStart(2,'0')+':'+String(a%60).padStart(2,'0')+' · '+z.replace(/_/g,' ')+(z==DEVTZ?' (this device)':'')]}).sort((a,b)=>a[1]-b[1]||a[0].localeCompare(b[0])).map(x=>[x[0],x[2]])})())).map(o=>`<option value="${o[0]}"${o[0]==cur?' selected':''}>${esc(o[1])}</option>`).join('');
+
+const rng=(a,b)=>Array.from({length:b-a},(_,i)=>a+i);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=h=>{h=h%24;return h==0?'12am':h<12?h+'am':h==12?'12pm':(h-12)+'pm'};
+const fmtT=ts=>{const a=lp(ts),n=lp(Date.now());return (a.key==n.key?'':DN[a.wd]+' ')+clk(ts)};
+const fmtD=ts=>{const s=typeof ts=='string',d=s?new Date(ts.slice(0,10)+'T12:00:00Z'):new Date(ts);return d.toLocaleDateString([],{weekday:'short',day:'numeric',month:'short',timeZone:s?'UTC':myTz()})};
+const dk=t=>lp(t).key;
+const rid=n=>Array.from({length:n},()=>'ABCDEFGHJKMNPQRSTUVWXYZ23456789'[Math.random()*31|0]).join('');
+const bits=(a,d,h)=>a&&((a[d]>>(h-6))&1);const pack=a=>a.reduce((x,h)=>x|(1<<(h-6)),0);
+const hue=u=>{let h=0;for(const c of String(u))h=(h*31+c.charCodeAt(0))%360;return`hsl(${h} 70% 55%)`};
+const isOn=m=>m.ls&&Date.now()-m.ls<72e4,PH=/^data:image\/jpeg;base64,[A-Za-z0-9+\/=]+$/;
+const ago=ts=>{const k=Math.round((Date.now()-ts)/6e4);return k<1?'just now':k<60?k+'m ago':k<1440?Math.round(k/60)+'h ago':Math.round(k/1440)+'d ago'};
+const seen=m=>isOn(m)?' · 🟢 Online':m.ls?' · seen '+ago(m.ls):'';
+const av=(m,u,r)=>{const ph=m.ph&&PH.test(m.ph);return`<span class="av${r?' r':''}${isOn(m)?' ol':''}" style="${ph?`background:url(${m.ph}) center/cover`:`background:color-mix(in srgb,${hue(u)} 25%,var(--card))`}">${ph?'':esc(m.e||'🙂')}</span>`};
+const LS={get:k=>{try{return localStorage.getItem(k)}catch(e){}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
+const S={uid:null,me:null,G:{},authed:false,anon:false};let store,unsubU,wun,wg,wt,dirty=false,prevFree={},prevPing={},prevWave={},ip=null;
+let ui={view:'insights',sheet:null,gid:null,dur:2,scope:'all',type:0,plen:2,toast:'',hs:''};
+const gids=()=>(S.me?.gl||[]).map(x=>x.i);
+const curA=g=>(g&&g!='all'&&S.me.gv?.[g])||S.me.av||[0,0,0,0,0,0,0];
+const myEntry=g=>({n:S.me.name,e:S.me.emoji,un:S.me.un||'',b:S.me.bio||'',ph:S.me.ph||'',ls:S.me.ho?0:Date.now(),s:S.me.s||'auto',u:S.me.u||0,a:curA(g),x:S.me.x||{},dm:S.me.dm||{},tz:myTz(),z:zoff(myTz(),Date.now())});
+const isHub=()=>gids().length>=1&&ui.hub!==false;
+const freeIn=G=>G?Object.entries(G.m||{}).filter(([,m])=>eff(m).st=='free'):[];
+function rail(){const gl=S.me.gl||[];if(gl.length<1)return'';
+ return`<div class="rail" role="tablist" aria-label="Groups"><button class="rc ${isHub()?'on':''}" role="tab" data-a="hub">All</button>${gl.map(x=>{const f=S.G[x.i]?freeIn(S.G[x.i]).length:null;return`<button class="rc ${!isHub()&&x.i==ui.gid?'on':''}" role="tab" data-a="pick" data-id="${x.i}"><span>${esc(x.e)}</span>${esc(x.n)}${f!=null?`<i>${f}</i>`:''}</button>`}).join('')}<button class="rc add" data-a="gsw" aria-label="Join or create a group">＋ Join / create</button></div>`}
+function hubView(){const gl=S.me.gl||[];
+ const mine=eff(myEntry(ui.gid||gids()[0]));
+ const info=gl.map(x=>{const G=S.G[x.i],all=G?Object.entries(G.m||{}):[],fr=freeIn(G),oth=fr.filter(([u])=>u!=S.uid);return{x,G,all,fr,oth}});
+ info.sort((p,q)=>q.oth.length-p.oth.length||(p.x.n||'').localeCompare(q.x.n||''));
+ const around=[],seenU={};
+ for(const i of info)for(const [u,m] of i.oth){if(seenU[u])continue;seenU[u]=1;around.push({u,m,g:i.x})}
+ const nm=m=>esc((m.n||'').split(' ')[0]);
+ const prev=i=>{if(!i.G)return'Loading…';const ap=activePg(i.G)[0];if(ap)return`${ap.pg.e} ${esc((ap.m.n||'').split(' ')[0])} is up for ${esc(ap.pg.t.toLowerCase())}`;const o=i.oth.map(([,m])=>nm(m));
+  if(!o.length)return i.fr.length?'Only you are free right now':'Nobody is free right now';
+  return o.length==1?`${o[0]} is free now`:o.length==2?`${o[0]} and ${o[1]} are free now`:`${o[0]}, ${o[1]} and ${o.length-2} more are free now`};
+ const rows=info.map(i=>`<button class="crow ${i.oth.length?'live':''}" data-a="pick" data-id="${i.x.i}"><span class="gi" style="--h:${gh(i.x.i)}">${esc(i.x.e)}</span><span class="cb f1"><b>${esc(i.x.n)}</b><small>${prev(i)}</small></span><span class="cm">${i.oth.length?`<i class="badge">${i.oth.length}</i>`:`<small>${i.G?i.all.length+' '+(i.all.length==1?'member':'members'):''}</small>`}</span></button>`).join('');
+ return`<div class="hubhead"><h1>${H(Date.now())<12?"Good morning":H(Date.now())<18?"Good afternoon":"Good evening"}, ${esc((S.me.name||"").split(" ")[0])}</h1><p class="sub mut">${around.length?`${around.length} ${around.length==1?'person is':'people are'} free right now`:'Nobody else is free right now'}</p></div>
+ ${startCard()}<div class="hubcols"><div><div class="card mystat${mine.st=='free'?' is-free':''}"><div class="row sp nw"><span class="row nw" style="gap:12px">${av({e:S.me.emoji,ph:S.me.ph},S.uid,mine.st=='free')}<span><b>${mine.st=='free'?'You’re free':'You’re busy'}</b><br><small>${esc(stTxt(mine))}${S.me.nt?` · “${esc(S.me.nt)}”`:''}</small></span></span></div>
+ <div class="seg w" style="margin:14px 0 0"><button class="${mine.st=='free'?'on fr':''}" data-a="st" data-k="free">I’m free</button><button class="${mine.st=='busy'?'on bz':''}" data-a="st" data-k="busy">I’m busy</button></div></div>
+ ${around.length?`<div class="around"><div class="row nw" style="gap:14px;overflow-x:auto;padding:4px 2px 10px">${around.map(a=>`<button data-a="pick" data-id="${a.g.i}" class="ar">${av(a.m,a.u,true)}<small>${nm(a.m)}</small></button>`).join('')}</div></div>`:''}
+ </div><div><div class="row sp nw hubtop"><h2>Your groups</h2><span class="row nw" style="gap:8px"><button class="btn s g" data-a="gjoin">Join with code</button><button class="btn s" data-a="gnew">＋ New</button></span></div><div class="chats card">${rows}</div></div></div>
+ `}
+function nowbar(g,fr,ms){const n=fr.length,oth=fr.filter(x=>x.u!=S.uid),fn=x=>esc((x.m.n||'').split(' ')[0]),nx=ms.filter(x=>x.e.st=='busy'&&x.e.until).sort((a,b)=>a.e.until-b.e.until)[0],
+a=oth.length>3?[...oth.slice(0,2).map(fn),(oth.length-2)+' more']:oth.map(fn),nm=a.length>1?a.slice(0,-1).join(', ')+' and '+a[a.length-1]:a[0],
+sub=oth.length?nm+(oth.length==1?' is free':' are free'):n?'Just you right now':nx?'Next up: '+fn(nx)+' from '+esc(fmtT(nx.e.until)):'Ask your friends to add their hours';
+return`<div class="card now ${n?'live':''}"><div class="now-top" data-a="freelist"><span class="livedot">${n?'Live now':'Quiet right now'}</span>${n?`<span class="stack">${fr.slice(0,4).map(x=>av(x.m,x.u)).join('')}</span>`:''}<div class="now-n">${n?`${n}<em>free now</em>`:'Nobody free'}</div><div class="now-sub">${sub}</div></div><div class="now-act"><button class="btn s" data-a="ping">Who’s up?</button><button class="btn s g" data-a="newplan">Make a plan</button></div></div>`}
+const prevPg={};
+function activePg(G){return Object.entries((G&&G.m)||{}).filter(([u,m])=>u!=S.uid&&m.pg&&Date.now()-m.pg.ts<18e5).map(([u,m])=>({u,m,pg:m.pg}))}
+function pingBar(G){if(!G)return'';const mine=(G.m||{})[S.uid]||{};let h='';
+ const myp=mine.pg&&Date.now()-mine.pg.ts<18e5?mine.pg:null;
+ if(myp){const rs=Object.entries(G.m||{}).filter(([u,m])=>u!=S.uid&&m['pr_'+S.uid]&&m['pr_'+S.uid].ts>=myp.ts),yes=rs.filter(([,m])=>m['pr_'+S.uid].r=='in').map(([,m])=>esc((m.n||'').split(' ')[0]));
+  h+=`<div class="card pingc mine"><span class="pe">${myp.e}</span><span class="f1"><b>You asked: up for ${esc(myp.t.toLowerCase())}?</b><br><small>${yes.length?yes.join(', ')+' '+(yes.length==1?'is':'are')+' in':'Waiting for replies'}</small></span></div>`}
+ for(const a of activePg(G)){const r=(a.m['pr_'+a.u]||null),mr=(mine['pr_'+a.u]&&mine['pr_'+a.u].ts>=a.pg.ts)?mine['pr_'+a.u].r:null;
+  h+=`<div class="card pingc"><div class="row nw" style="gap:12px"><span class="pe">${a.pg.e}</span><span class="f1"><b>${esc((a.m.n||'').split(' ')[0])} is up for ${esc(a.pg.t.toLowerCase())}</b><br><small>${ago(a.pg.ts)}</small></span></div><div class="seg w" style="margin-top:12px"><button class="${mr=='in'?'on fr':''}" data-a="pgr" data-u="${a.u}" data-r="in">I’m in</button><button class="${mr=='later'?'on':''}" data-a="pgr" data-u="${a.u}" data-r="later">Later</button><button class="${mr=='no'?'on bz':''}" data-a="pgr" data-u="${a.u}" data-r="no">Can’t</button></div></div>`}
+ return h}
+function startCard(){if(LS.get('fh_gs')=='1'||!S.me)return'';if((S.me.av||[]).some(x=>x))return'';
+ return`<div class="card start"><div class="row sp nw"><b>👋 Welcome! When are you usually free?</b><button class="x" data-a="gsx" aria-label="Dismiss">✕</button></div><p class="mut" style="margin:6px 0 14px">Tap one to get started. Friends only ever see “free” or “busy”, and you can change this any time.</p><div class="rsv" style="grid-template-columns:repeat(2,1fr)">${TPL.map((t,i)=>`<button class="chip" data-a="tpl" data-i="${i}">${t[0]}</button>`).join('')}</div><button class="lnk" style="margin-top:14px" data-a="nav" data-v="me">Set exact hours instead</button></div>`}
+async function quickAvail(k){if(!S.me)return;const n=lp(Date.now()),dm={...(S.me.dm||{})},x={...(S.me.x||{})},od=i=>ymd(n.y,n.mo,n.d+i);let fx=0;
+ const set=(key,on,a,b)=>{const m=on?pack(rng(a,b)):0;dm[key]=on?(dayMask(key)|m):0;if(on&&x[key]&(m)){x[key]&=~m;fx=1}};
+ if(k=='tonight')set(n.key,1,18,24);else if(k=='busyday')set(n.key,0);
+ else if(k=='wkend'||k=='busywk'){const on=k=='wkend',s=(5-n.wd+7)%7;(n.wd==6?[0]:n.wd==5?[0,1]:[s,s+1]).forEach(d=>set(od(d),on,9,24))}
+ else return;
+ try{if(fx)await saveX(x);await saveDM(dm);toast(k=='tonight'?'Marked free tonight ✓ Your group sees it':k=='wkend'?'Marked free this weekend ✓ Your group sees it':k=='busyday'?'Marked busy today ✓':'Marked busy this weekend ✓')}catch(e){toast('Could not save. Check your connection.')}}
+function toast(m){ui.toast=m;render();setTimeout(()=>{ui.toast='';render()},2400)}
+
+/* ---- availability (weekly pattern + one-off busy days, in each person's own time) ---- */
+function slotOf(m,ts){const L=new Date(ts+(m.tz?zoff(m.tz,ts):(m.z??-new Date(ts).getTimezoneOffset()))*6e4);let h=L.getUTCHours(),d=(L.getUTCDay()+6)%7,D=L;if(h<6){h+=24;D=new Date(+L-864e5);d=(d+6)%7}return{d,h,k:D.toISOString().slice(0,10)}}
+const isFree=(m,ts)=>{const s=slotOf(m,ts),o=m.dm?.[s.k],f=o!=null?(o>>(s.h-6))&1:bits(m.a,s.d,s.h);return !!f&&!((m.x?.[s.k]>>(s.h-6))&1)};
+function eff(m,now=Date.now()){if(m.s&&m.s!='auto'&&m.u>now)return{st:m.s=='free'?'free':'busy',until:m.u,manual:1};
+const f=isFree(m,now);let k=1;for(;k<168;k++)if(isFree(m,now+k*36e5)!=f)break;const b=new Date(now);b.setMinutes(0,0,0);return{st:f?'free':'busy',until:k<168?b.getTime()+k*36e5:0}}
+const stTxt=e=>e.manual?`${e.st=='free'?'Free':'Busy'} until ${fmtT(e.until)}`:e.st=='free'?(e.until?`Free until ${fmtT(e.until)}`:'Free all week'):(e.until?`Free from ${fmtT(e.until)}`:'No free time set');
+const allFree=(m,t,l)=>{for(let j=0;j<l;j++)if(!isFree(m,t+j*36e5))return false;return true};
+function best(G,len=2,k=3){const z=gzo(G),ms=Object.values(G.m||{}),o=[],n0=new Date();n0.setMinutes(0,0,0);const t0=n0.getTime()+36e5;
+for(let i=0;i<168;i++){const t=t0+i*36e5,h=lp(t,z).h;if(h<8||h+len>23)continue;const f=ms.filter(m=>allFree(m,t,len));o.push({t,n:f.length,f,tot:ms.length,pr:Math.abs(h-18)})}
+o.sort((a,b)=>b.n-a.n||a.pr-b.pr||a.t-b.t);const r=[],seen={};for(const w of o){if(w.n<2&&w.tot>1)break;const d=lp(w.t,z).key;if((seen[d]||0)>=1)continue;seen[d]=1;r.push(w);if(r.length==k)break}return r}
+const planStart=p=>{if(p.at)return p.at;const t=new Date(),k=(p.d-((t.getDay()+6)%7)+7)%7;return new Date(t.getFullYear(),t.getMonth(),t.getDate()+k,p.h).getTime()};
+const myRsvp=p=>p.r?.[S.uid]||((p.in||[]).includes(S.uid)?'in':'');
+
+/* ---- Firebase ---- */
+async function fbStore(cfg){const [A,Au,F]=await Promise.all([import(FU('app')),import(FU('auth')),import(FU('firestore'))]);
+const app=A.initializeApp(cfg),au=Au.getAuth(app),db=(()=>{try{return F.initializeFirestore(app,{localCache:F.persistentLocalCache({tabManager:F.persistentMultipleTabManager()})})}catch(e){return F.getFirestore(app)}})(),gd=g=>F.doc(db,'groups',g);let an=null;if(cfg.measurementId)import(FU('analytics')).then(M=>{an=[M,M.getAnalytics(app)]}).catch(()=>{});
+return{pushReg:async v=>{if(!v||!('serviceWorker' in navigator))return null;const M=await import(FU('messaging'));if(!(await M.isSupported()))return null;const reg=await navigator.serviceWorker.register('firebase-messaging-sw.js');return M.getToken(M.getMessaging(app),{vapidKey:v,serviceWorkerRegistration:reg})},log:(n,p)=>{try{an&&an[0].logEvent(an[1],n,p)}catch(e){}},onAuth:cb=>Au.onAuthStateChanged(au,u=>cb(u?{uid:u.uid,name:u.displayName||'',anon:u.isAnonymous}:null)),
+google:()=>Au.signInWithPopup(au,new Au.GoogleAuthProvider()),guest:()=>Au.signInAnonymously(au),out:()=>Au.signOut(au),
+link:()=>Au.linkWithPopup(au.currentUser,new Au.GoogleAuthProvider()),
+calToken:async()=>{const P=new Au.GoogleAuthProvider();P.addScope('https://www.googleapis.com/auth/calendar.freebusy');const u=au.currentUser,r=u.isAnonymous?await Au.linkWithPopup(u,P):await Au.reauthenticateWithPopup(u,P);return Au.GoogleAuthProvider.credentialFromResult(r).accessToken},
+watchUser:(u,cb)=>F.onSnapshot(F.doc(db,'users',u),s=>cb(s.exists()?s.data():null)),saveUser:(u,d)=>F.setDoc(F.doc(db,'users',u),d,{merge:true}),
+watchGroup:(g,cb)=>F.onSnapshot(gd(g),s=>cb(s.exists()?s.data():null)),getGroup:async g=>{const s=await F.getDoc(gd(g));return s.exists()?s.data():null},
+mkGroup:(g,d)=>F.setDoc(gd(g),d),join:(g,u,e)=>F.updateDoc(gd(g),{members:F.arrayUnion(u),['m.'+u]:e}),
+leave:(g,u)=>F.updateDoc(gd(g),{members:F.arrayRemove(u),['m.'+u]:F.deleteField()}),
+setMember:(g,u,p)=>F.updateDoc(gd(g),Object.fromEntries(Object.entries(p).map(([k,v])=>['m.'+u+'.'+k,v]))),
+setPlan:(g,id,p)=>F.updateDoc(gd(g),{['p.'+id]:p===null?F.deleteField():p}),rsvp:(g,id,u,v)=>F.updateDoc(gd(g),{['p.'+id+'.r.'+u]:v}),setGz:(g,z)=>F.updateDoc(gd(g),{gz:z}),
+claimUn:(n,old,u)=>F.runTransaction(db,async t=>{const r=n?F.doc(db,'usernames',n):null,o=old&&old!=n?F.doc(db,'usernames',old):null,rs=r&&await t.get(r),os=o&&await t.get(o);if(rs&&rs.exists()&&rs.data().uid!=u)throw{code:'un-taken'};if(r&&!rs.exists())t.set(r,{uid:u});if(os&&os.exists()&&os.data().uid==u)t.delete(o)}),
+delAcct:async(u,gl,un)=>{const cu=au.currentUser;if(!cu.isAnonymous)await Au.reauthenticateWithPopup(cu,new Au.GoogleAuthProvider());for(const g of gl)await F.updateDoc(gd(g),{members:F.arrayRemove(u),['m.'+u]:F.deleteField()}).catch(()=>{});if(un)await F.deleteDoc(F.doc(db,'usernames',un)).catch(()=>{});await F.deleteDoc(F.doc(db,'users',u));await Au.deleteUser(cu)}}}
+const log=(n,p)=>{try{store&&store.log(n,p)}catch(e){}};
+function setTheme(t){const r=document.documentElement;if(t=='system')delete r.dataset.theme;else r.dataset.theme=t}setTheme(LS.get('fh_t')||'system');
+const hourly=A=>{const d=ui.hd||0;return`<div class="row" style="margin-bottom:12px">${DN.map((n,i)=>`<button class="chip ${i==d?'on':''}" data-a="hday" data-d="${i}">${n}</button>`).join('')}</div><div class="hg">${rng(6,30).map(h=>`<button class="hb ${bits(A,d,h)?'on':''}" data-a="hh" data-d="${d}" data-h="${h}">${fmt(h)}</button>`).join('')}</div>`};
+const seg=(a,k,o,cur)=>`<div class="seg">${o.map(x=>`<button class="${x[0]==cur?'on':''}" data-a="${a}" data-${k}="${x[0]}">${x[1]}</button>`).join('')}</div>`;
+function settingsView(){const m=S.me;return`<h1>Settings</h1><p class="mut">Signed in as ${esc(m.name)}${m.un?' (@'+esc(m.un)+')':''}.</p>
+<div class="card"><b>Appearance</b><div class="set"><span>Theme</span>${seg('thm','t',[['system','Auto'],['light','Light'],['dark','Dark']],LS.get('fh_t')||'system')}</div></div>
+${ADV()?`<div class="card"><b>My hours</b><div class="set"><span class="f1">How you set your free time<br><small>Blocks are quick. Hourly lets you pick exact hours.</small></span>${seg('hm','v',[['0','Blocks'],['1','Hourly']],LS.get('fh_h')=='1'?'1':'0')}</div></div>`:''}
+<div class="card"><b>Connect</b><div class="row cn" style="margin-top:12px">${ADV()?'<button class="btn s g" data-a="gcal">📅 Import busy times from Google Calendar</button>':''}<button class="btn s g" data-a="notif">${LS.get('fh_n')=='1'?'🔔 Alerts on':'🔔 Alert me when friends are free'}</button>${ip?'<button class="btn s g" data-a="install">📲 Install app</button>':''}</div>${ip?'':'<small style="display:block;margin-top:10px">To install: iPhone, Share then Add to Home Screen. Android, menu then Install app.</small>'}</div>
+<div class="card"><b>More features</b><div class="set"><span class="f1">Show advanced features<br><small>Hour-by-hour hours and Google Calendar import.</small></span>${seg('adv','v',[['0','Off'],['1','On']],ADV()?'1':'0')}</div></div>
+<div class="card"><b>Account</b><div class="row" style="margin-top:12px"><button class="btn s g" data-a="privacy">Privacy</button><button class="btn s g" data-a="signout">Sign out</button><button class="btn s d" data-a="delask">Delete my account</button></div></div><p class="mut" style="text-align:center"><small>Keyboard: 1–${navList().length} switch view · N new plan · F free now · Esc close</small><br><small>Build 26 Nov v2 · When free page included</small></p>`}
+const ADV=()=>LS.get('fh_adv')=='1',HRLY=()=>ADV()&&LS.get('fh_h')=='1',navList=()=>NAV;
+const forG=fn=>Promise.all(gids().map(fn));
+const pushMe=async p=>{await store.saveUser(S.uid,p);const m={...p};delete m.gl;delete m.gv;delete m.name;delete m.emoji;if(p.name||p.emoji){}await forG(g=>store.setMember(g,S.uid,{...(p.av?{a:curA(g)}:{}),...(p.x?{x:p.x}:{}),...(p.gv?{a:curA(g)}:{}),tz:myTz(),z:zoff(myTz(),Date.now())}))};
+function saveHours(){dirty=true;ui.hs='Saving…';clearTimeout(wt);wt=setTimeout(flush,1200);render()}
+async function flush(){if(!dirty||!S.me)return;dirty=false;log('hours_saved');try{await pushMe({av:S.me.av,gv:S.me.gv||{}});ui.hs='Saved ✓';render();setTimeout(()=>{ui.hs='';render()},2500)}catch(e){dirty=true;toast('Could not save. Check your connection.')}}
+addEventListener('pagehide',flush);
+const wmap={},prevN={};
+function stopAll(){for(const k in wmap){try{wmap[k]()}catch(e){}delete wmap[k]}}
+function watchActive(){
+ if(document.hidden||!S.authed||!S.me){return}
+ const ids=gids();
+ for(const k of Object.keys(wmap))if(!ids.includes(k)){try{wmap[k]()}catch(e){}delete wmap[k];delete prevN[k]}
+ for(const g of ids){if(wmap[g])continue;
+  wmap[g]=store.watchGroup(g,d=>{
+   if(d){const old=prevN[g],now=(d.members||[]).length;
+    if(old!==undefined&&now>old&&!document.hidden){const prev=S.G[g]?Object.keys(S.G[g].m||{}):[];const nu=Object.entries(d.m||{}).filter(([u])=>!prev.includes(u)&&u!=S.uid).map(([,m])=>m.n).filter(Boolean);const gl=(S.me.gl||[]).find(x=>x.i==g);toast('👋 '+(nu[0]||'Someone')+(nu.length>1?' and '+(nu.length-1)+' more':'')+' joined '+(gl?gl.n:'your group'))}
+    prevN[g]=now;S.G[g]=d}else{delete S.G[g];delete prevN[g]}
+   if(g==ui.gid)chk();remind();render()})}
+ wun=wmap[ui.gid]||null;wg=ui.gid}
+function beat(f){if(!S.me||document.hidden||S.me.ho||!ui.gid)return;const n=Date.now();if(!f&&n-(S.lb||0)<3e5)return;S.lb=n;store.setMember(ui.gid,S.uid,{ls:n}).catch(()=>{})}
+function sync(){const ids=gids();if(!ui.gid||!ids.includes(ui.gid))ui.gid=ids[0]||null;watchActive()}
+addEventListener('online',()=>{stopAll();if(S.authed)watchActive()});
+document.addEventListener('visibilitychange',()=>{if(document.hidden){stopAll();flush()}else if(S.authed){watchActive();beat();render()}});
+
+function remind(){for(const g in S.G)for(const [id,p] of Object.entries(S.G[g].p||{})){const st=planStart(p),d=st-Date.now();if(d<0||d>18e5||myRsvp(p)!='in'||LS.get('fh_r'+id)==String(st))continue;LS.set('fh_r'+id,String(st));const m=`${p.e} ${p.t} starts at ${clk(st)} your time (in ${Math.max(1,Math.round(d/6e4))} min)`;if(window.Notification&&Notification.permission=='granted'&&LS.get('fh_n')=='1'&&document.hidden)new Notification('Freehu',{body:m});else if(!document.hidden)toast('⏰ '+m)}}
+/* ---- "X just became free" alerts (while the app is open or in the background) ---- */
+function chk(){const G=S.G[ui.gid];if(!G)return;for(const [u,m] of Object.entries(G.m||{})){if(u==S.uid)continue;const f=eff(m).st=='free',k=ui.gid+u;
+if(prevFree[k]===false&&f&&LS.get('fh_n')=='1'){const msg=`${m.n} is free now`;if(window.Notification&&Notification.permission=='granted'&&document.hidden)new Notification('Freehu',{body:msg,icon:'data:image/svg+xml,'});else if(!document.hidden)toast('🟢 '+msg)}prevFree[k]=f;const fn=m.fn||0;if(prevPing[k]!==undefined&&fn>prevPing[k]&&Date.now()-fn<6e5){const mg=`${m.n} is free now. Who’s around? 🙋`;if(window.Notification&&Notification.permission=='granted'&&document.hidden&&LS.get('fh_n')=='1')new Notification('Freehu',{body:mg});else if(!document.hidden)toast(mg)}prevPing[k]=fn;const pg=m.pg?m.pg.ts:0;if(prevPg[k]!==undefined&&pg>prevPg[k]&&Date.now()-pg<6e5){const mg=`${m.n}: up for ${m.pg.t.toLowerCase()}? ${m.pg.e}`;if(window.Notification&&Notification.permission=='granted'&&document.hidden&&LS.get('fh_n')=='1')new Notification('Freehu',{body:mg});else if(!document.hidden)toast(mg);navigator.vibrate&&navigator.vibrate([20,40,20])}prevPg[k]=pg;const wv=m.wv&&m.wv.u==S.uid?m.wv.ts:0;if(prevWave[k]!==undefined&&wv>prevWave[k]&&Date.now()-wv<6e5){const mg=`${m.n} waved at you 👋`;if(window.Notification&&Notification.permission=='granted'&&document.hidden&&LS.get('fh_n')=='1')new Notification('Freehu',{body:mg});else if(!document.hidden)toast(mg)}prevWave[k]=wv}}
+
+/* ---- views ---- */
+const I=p=>`<svg viewBox="0 0 24 24">${p}</svg>`;
+const NAV=[['insights',I('<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'),'When free'],['home',I('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),'Free now'],['plans',I('<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/>'),'Plans'],['me',I('<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/>'),'My hours'],['settings',I('<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>'),'Settings']];
+
+const finishOb=()=>{ui.ob=null;S.me.ob=true;store.saveUser(S.uid,{ob:true}).catch(()=>{})};
+function onboard(){const o=ui.ob,st=o.step,dots=`<div class="dots">${[0,1,2].map(i=>`<i class="${i==st?'on':''}"></i>`).join('')}</div>`;
+if(st==0){const em=o.em||S.me.emoji||AVS[0];return`<div style="text-align:center"><div style="display:grid;place-items:center;filter:drop-shadow(0 14px 28px #4b3fd655)">${MARK(64)}</div>${dots}<h1>Welcome to Freehu</h1><p class="mut">See when your friends are free, wherever they live.</p></div><div class="card"><label class="l" style="margin-top:0">What should friends call you?</label><input type="text" id="on" maxlength="20" placeholder="Your first name" value="${esc(o.name??(S.me.name&&S.me.name!='Me'?S.me.name:''))}"><label class="l">Pick a face</label><div class="row">${AVS.map(e=>`<button class="chip ${em==e?'on':''}" data-a="obem" data-e="${e}">${e}</button>`).join('')}</div><p class="mut" style="margin:16px 0 0"><small>🕒 We found your time zone: <b>${esc(tzLbl(myTz()))}</b>. Friends in other countries will see your times in their own clock. You can change it later in your profile.</small></p></div><button class="btn w" data-a="obnext">Next</button>`}
+if(st==1){return`<div style="text-align:center">${dots}<h1>When are you usually free?</h1><p class="mut">Pick any that fit. You can change this any time.</p></div>${TPL.map((t,i)=>`<button class="big-chip ${o.picks.includes(i)?'on':''}" data-a="obpick" data-i="${i}"><span style="font-size:1.5rem">${['🌆','🏖️','💼','☀️'][i]}</span><span>${t[0]}<small class="mut">${['5pm to 10pm, every day','Saturday and Sunday, all day','6pm to midnight, Monday to Friday','6am to midday, every day'][i]}</small></span>${o.picks.includes(i)?'<span class="tick">✓</span>':''}</button>`).join('')}<div class="row" style="margin-top:14px"><button class="btn g" data-a="obback">Back</button><button class="btn f1" data-a="obhours">${o.picks.length?'Next':'Skip for now'}</button></div>`}
+const gl=S.me.gl||[];
+if(gl.length)return`<div style="text-align:center">${dots}<h1>You’re in ${esc(gl[0].e)} ${esc(gl[0].n)} 🎉</h1><p class="mut">You’ll see when everyone is free as soon as they add their hours.</p></div><button class="btn w" data-a="obdone">Let’s go</button>`;
+return`<div style="text-align:center">${dots}<h1>Now, your people</h1><p class="mut">A group is your family, friends, a class or a team. Freehu works best with at least one friend in it.</p></div>${groupForms()}<button class="btn g w" data-a="obdone">Skip for now</button>`}
+function groupForms(){const t=ui.gt||'join',e=ui.ge||'👥';
+return`<div class="gf"><div class="seg w"><button class="${t=='join'?'on':''}" data-a="gtab" data-t="join">Join with a code</button><button class="${t=='new'?'on':''}" data-a="gtab" data-t="new">Create a group</button></div>`+(t=='join'?`<p class="mut gh">Got an invite? Paste the link or type the 6-letter code your friend sent you.</p><input class="codein" type="text" id="jc" placeholder="ABC123" autocomplete="off" autocapitalize="characters" spellcheck="false"><button class="btn w" data-a="join">Join group</button>`:`<p class="mut gh">Choose an icon and a name. You’ll get a code and a link to invite people.</p><div class="gpick"><span class="gbig">${e}</span><input type="text" id="gn" placeholder="Group name, e.g. Family" maxlength="30"></div><div class="row egrid">${GE.map(x=>`<button class="chip ${x==e?'on':''}" data-a="gem" data-e="${x}">${x}</button>`).join('')}</div><label class="l">Group time zone</label><select id="gz">${tzOpts(myTz())}</select><small style="display:block;margin-top:6px">Plans and best times use this clock. Everyone still sees their own time too.</small><button class="btn w" data-a="mkg">Create group</button>`)+`</div>`}
+function banners(){let h='';const hr=H(Date.now());
+const hh=(S.me?.av||[]).some(x=>x);
+if(S.me&&S.me.tz&&S.me.tz!=DEVTZ&&!ui.tzx&&LS.get('fh_tzx')!=DEVTZ)h+=`<div class="banner"><span class="f1"><b>Switch to ${esc(tzLbl(DEVTZ))} time?</b><small>Your profile says ${esc(tzLbl(S.me.tz))}.</small></span><button class="btn s" data-a="tzdev">Switch</button><button class="btn s g" data-a="tzx">Keep</button></div>`;
+if(S.anon)h+=`<div class="banner"><span class="f1"><b>Save your account</b><br><small>Guests lose everything if the browser is cleared.</small></span><button class="btn s" data-a="link">Sign in with Google</button></div>`;
+if(!hh)h+=`<div class="banner"><span class="f1"><b>Step 1: tell us when you’re free</b><br><small>Takes 10 seconds.</small></span><button class="btn s" data-a="nav" data-v="me">Set my hours</button></div>`;
+if(hh&&!S.anon&&window.Notification&&Notification.permission!='denied'&&LS.get('fh_n')==null)h+=`<div class="banner"><span class="f1"><b>Get a buzz when friends are free</b><br><small>One tap. You can turn it off any time in Settings.</small></span><button class="btn s" data-a="notif">Turn on</button><button class="btn s g" data-a="nx">Not now</button></div>`;
+if(!navigator.onLine)h+=`<div class="banner">📴 You’re offline. Showing the last data.</div>`;return h}
+async function autoJoin(){const c=(LS.get('fh_j')||'').toUpperCase();if(!c||!S.me)return;LS.set('fh_j','');try{history.replaceState(null,'',location.pathname)}catch(e){}
+if(gids().includes(c)){ui.gid=c;render();return}if(gids().length>=MAXG)return toast('You’re already in '+MAXG+' groups. Leave one to join.');
+try{const g=await store.getGroup(c);if(!g)return toast('That invite link isn’t valid');if((g.members||[]).length>=MAXM)return toast('That group is full');await store.join(c,S.uid,myEntry(c));await store.saveUser(S.uid,{gl:[...(S.me.gl||[]),{i:c,n:g.name,e:g.emoji}]});ui.gid=c;ui.hub=false;ui.view='insights';toast('You joined '+g.name+' ✓')}catch(e){toast('Couldn’t join. Try the link again.')}}
+function nudge(G,t){const w=t[0];if(!w||w.tot<2||w.n<w.tot||w.t>Date.now()+3*864e5)return'';if(Object.values(G.p||{}).some(p=>Math.abs(planStart(p)-w.t)<864e5))return'';
+return`<div class="banner nudge"><span class="f1"><b>${dg(G,w.t)} at ${clk(w.t,gzo(G))}${gzo(G)!=myTz()?' '+esc(tzLbl(gzo(G))):''} works for all ${w.tot} of you</b><br><small>Lock it in before it fills up.</small></span><button class="btn s fr" data-a="newplan" data-t="${w.t}">Plan it</button></div>`}
+window.pkSet=b=>{const g=b.closest('.pk');const i=g.querySelector('input');i.value=b.dataset.v;ui['pk_'+i.id]=b.dataset.v;g.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b))};
+const pickG=(id,o,v,c)=>`<div class="pk ${c||''}"><input type="hidden" id="${id}" value="${v}">${o.map(x=>`<button type="button" class="chip ${x[0]==v?'on':''} ${x[2]||''}" data-v="${x[0]}" onclick="pkSet(this)">${x[1]}</button>`).join('')}</div>`;
+const dateOpts=(z,sel)=>[...Array(21)].map((_,i)=>{const t=Date.now()+i*864e5,f=(o)=>new Intl.DateTimeFormat('en-GB',{...o,timeZone:z}).format(t);return[lp(t,z).key,`<small>${i?f({weekday:'short'}):'Today'}</small>${f({day:'numeric',month:'short'})}`,'dc']});
+const ILP='<svg class="ill" viewBox="0 0 64 64" width="64" height="64" fill="none" stroke="var(--acc)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="14" width="48" height="42" rx="9" fill="var(--accsoft)"/><path d="M8 26h48M21 8v10M43 8v10"/><circle cx="32" cy="42" r="6"/><path d="M32 39v3l2 1.5"/></svg>';
+const ILF='<svg class="ill" viewBox="0 0 64 64" width="64" height="64" fill="none" stroke="var(--acc)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="32" cy="22" r="9" fill="var(--accsoft)"/><circle cx="14" cy="30" r="6"/><circle cx="50" cy="30" r="6"/><path d="M16 54c0-9 7-15 16-15s16 6 16 15M3 50c0-6 4-10 9-11M61 50c0-6-4-10-9-11"/></svg>';
+function weekGrid(G,pl){const z=gzo(G),ds=[...Array(7)].map((_,i)=>{const t=Date.now()+i*864e5;return{k:lp(t,z).key,l:new Intl.DateTimeFormat('en-GB',{weekday:'short',day:'numeric',timeZone:z}).format(t)}});return`<div class="wk">${ds.map((d,i)=>{const ps=pl.filter(x=>lp(planStart(x[1]),z).key==d.k);return`<div class="wd${i?'':' td'}"><small>${i?d.l:'Today'}</small>${ps.map(x=>`<div class="wp"><b>${esc(x[1].e)} ${esc(x[1].t)}</b><small>${tr(G,planStart(x[1]),x[1].l)}</small></div>`).join('')||'<span class="wn">–</span>'}</div>`}).join('')}</div>`}
+const tzList=()=>{tzOpts('');return _tzo};
+window.tzTog=b=>{const l=b.parentElement.querySelector('.tzl');l.hidden=!l.hidden;if(!l.hidden){l.querySelector('input').focus();const o=l.querySelector('.on');o&&(l.querySelector('.tzo').scrollTop=o.offsetTop-80)}};
+window.tzF=i=>{const q=i.value.trim().toLowerCase();i.nextElementSibling.querySelectorAll('button').forEach(b=>{b.hidden=!!q&&!b.textContent.toLowerCase().includes(q)})};
+window.tzSet=b=>{const w=b.closest('.tzp'),h=w.querySelector('input[type=hidden]');h.value=b.dataset.z;ui['pk_'+h.id]=b.dataset.z;w.querySelector('.tzb span').textContent=b.textContent;w.querySelectorAll('.tzo button').forEach(x=>x.classList.toggle('on',x===b));w.querySelector('.tzl').hidden=true};
+const tzPick=(id,v)=>{v=ui['pk_'+id]||v;const L=tzList();return`<div class="tzp"><input type="hidden" id="${id}" value="${esc(v)}"><button type="button" class="tzb" onclick="tzTog(this)"><span>${esc((L.find(o=>o[0]==v)||[0,v])[1])}</span><i>▾</i></button><div class="tzl" hidden><input type="search" placeholder="Search city or region" oninput="tzF(this)" autocomplete="off"><div class="tzo">${L.map(o=>`<button type="button" data-z="${o[0]}" class="${o[0]==v?'on':''}" onclick="tzSet(this)">${esc(o[1])}</button>`).join('')}</div></div></div>`};
+function planCard(G,id,p){const s=planStart(p),ms=Object.values(G.m||{}),r=p.r||{};(p.in||[]).forEach(u=>{if(!r[u])r[u]='in'});const my=myRsvp(p),cnt=k=>Object.values(r).filter(x=>x==k).length,e=s+p.l*36e5,ft=ms.filter(m=>{try{return allFree(m,s,Math.max(1,Math.ceil(p.l)))}catch(x){return false}}).length;
+const MM=Object.entries(G.m||{}),pin=MM.filter(([u])=>r[u]=='in'),pmb=MM.filter(([u])=>r[u]=='maybe'),pno=MM.filter(([u])=>r[u]=='no'),pwt=MM.filter(([u])=>!r[u]),prep=MM.length-pwt.length,ppct=MM.length?Math.round(prep/MM.length*100):0,
+pln=(ic,lab,arr)=>`<div class="rr"><span class="rl">${ic} ${lab} <b>${arr.length}</b></span><span class="rn">${arr.length?arr.map(([u,m])=>`<span class="rp">${esc(m.e||'🙂')} ${u==S.uid?'You':esc((m.n||'').split(' ')[0])}</span>`).join(''):'<small class="mut">–</small>'}</span></div>`;
+return`<div class="card"><b style="font-size:1.1rem">${esc(p.e)} ${esc(p.t)}</b><p class="mut" style="margin:2px 0 12px">${dg(G,s)}, ${tr(G,s,p.l)}${p.pl?' · '+esc(p.pl):''}</p>
+<div class="rsum"><div class="rbar"><i style="width:${ppct}%"></i></div><small class="mut">${prep} of ${MM.length} replied${pwt.length?'':' · everyone has answered 🎉'}</small></div><div class="rlist">${pln('✅','In',pin)}${pln('🤔','Maybe',pmb)}${pln('❌','Can’t',pno)}${pwt.length?pln('⏳','Waiting',pwt):''}</div>
+<small class="mut" style="display:block;margin:0 0 10px">${ft} of ${ms.length} free then</small><div class="rsv psg">${[['in','I’m in'],['maybe','Maybe'],['no','Can’t']].map(x=>`<button class="chip r-${x[0]} ${my==x[0]?'on':''}" data-a="rsvp" data-id="${id}" data-v="${x[0]}">${x[1]}</button>`).join('')}</div>
+<div class="pact"><button class="btn s g" data-a="share" data-id="${id}">Share</button><button class="btn s g" data-a="ics" data-id="${id}">Add to calendar</button>${p.by==S.uid?`<button class="btn s d sp" data-a="delp" data-id="${id}">Delete</button>`:''}</div></div>`}
+function hoursEditor(){const A=curA(ui.scope),gl=S.me.gl||[];
+return`<div class="card hed"><b>Your usual week</b><p class="mut">Tap a box when you’re normally free. This repeats every week. Friends only see “free” or “busy”.</p>
+${ADV()?`<div style="margin-bottom:14px">${seg('hm','v',[['0','Blocks'],['1','Hourly']],LS.get('fh_h')=='1'?'1':'0')}</div>`:''}<div class="tpls">${TPL.map((t,i)=>`<button class="chip" data-a="tpl" data-i="${i}">${t[0]}</button>`).join('')}</div>
+${HRLY()?hourly(A):`<div class="grid"><span></span>${BK.map(b=>`<small>${b[0]}</small>`).join('')}${DN.map((n,d)=>`<button class="dl" data-a="wday" data-d="${d}">${n}</button>${BK.map((b,k)=>{const r=rng(b[1],b[2]),c=r.filter(h=>bits(A,d,h)).length;return`<button class="cell ${c==r.length?'full':c?'part':''}" data-a="cell" data-d="${d}" data-k="${k}" aria-label="${n} ${b[0]}"></button>`}).join('')}`).join('')}</div>`}
+<small class="mut" style="display:block;margin-top:12px">Tip: tap a day name for exact hours. Night = 10pm to 2am.</small><button class="btn w" style="margin-top:14px" data-a="savehours">${ui.hs=='Saving…'?'Saving…':ui.hs=='Saved ✓'?'Saved ✓':'Save my hours'}</button>
+${gl.length&&ADV()?`<label class="l">Who sees these hours?</label><div class="row"><button class="chip ${ui.scope=='all'?'on':''}" data-a="scope" data-g="all">Everyone</button>${gl.map(x=>`<button class="chip ${ui.scope==x.i?'on':''}" data-a="scope" data-g="${x.i}">${esc(x.e)} ${esc(x.n)}</button>`).join('')}</div>${ui.scope!='all'&&S.me.gv?.[ui.scope]?`<button class="btn s d" data-a="unscope">Use my main hours for this group</button>`:ui.scope!='all'?'<small>Editing now gives this group its own hours.</small>':''}`:''}</div>`}
+const FD=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+const sheetMask=()=>{const h=ui.sheet;return h.k=='day'?dayMask(h.d):(curA(ui.scope)[h.d]||0)};
+const setM=(d,mask)=>{S.me.av=S.me.av||[0,0,0,0,0,0,0];if(ui.scope!='all'){S.me.gv=S.me.gv||{};S.me.gv[ui.scope]=[...curA(ui.scope)];S.me.gv[ui.scope][d]=mask}else S.me.av[d]=mask;saveHours()};
+const setMask=m=>{const h=ui.sheet;h.k=='day'?saveDM({...(S.me.dm||{}),[h.d]:m}):setM(h.d,m)};
+const pc=n=>{let c=0;while(n){c+=n&1;n>>>=1}return c};
+const dayMask=k=>{const o=S.me.dm?.[k];if(o!=null)return o;return (S.me.av||[])[(new Date(k+'T12:00').getDay()+6)%7]||0};
+function exceptions(){const n=lp(Date.now()),cm=ui.cm||0,by=n.y+Math.floor((n.mo+cm)/12),bm=(n.mo+cm)%12,sd=cm==0?Math.max(1,n.d-n.wd):1,lead=(new Date(Date.UTC(by,bm,sd)).getUTCDay()+6)%7,dim=new Date(Date.UTC(by,bm+1,0)).getUTCDate(),today=n.key,x=S.me.x||{};
+let c='<span></span>'.repeat(lead);for(let i=sd;i<=dim;i++){const k=ymd(by,bm,i),r=pc(dayMask(k)&~(x[k]||0))/24;c+=`<button class="dc" ${k<today?'disabled':''} data-a="dsel" data-k="${k}" style="background:${r?`color-mix(in srgb,var(--ok) ${Math.round(20+r*80)}%,var(--fill))`:'var(--fill)'};${k==today?'box-shadow:0 0 0 2px var(--acc)':''}">${i}${S.me.dm?.[k]!=null?'<i></i>':''}</button>`}
+return`<div class="card"><b>One-off changes</b><div class="row sp nw" style="margin:10px 0 4px"><button class="x" data-a="mon" data-n="-1" ${cm>0?'':'disabled'} aria-label="Previous month">‹</button><b>${new Date(Date.UTC(by,bm,1)).toLocaleDateString([],{month:'long',year:'numeric',timeZone:'UTC'})}</b><button class="x" data-a="mon" data-n="1" ${cm<11?'':'disabled'} aria-label="Next month">›</button></div>
+<p class="mut" style="margin-top:6px">Away this weekend, or free on a day you’re usually busy? Tap a date. Green = free, a dot = you changed it.</p><div class="cal">${DN.map(d=>`<small>${d.slice(0,2)}</small>`).join('')}${c}</div>
+<label class="l">Away for several days?</label><small class="mut">From</small>${pickG('rf',dateOpts(myTz()),ui.pk_rf||'')}<small class="mut">To</small>${pickG('rt',dateOpts(myTz()),ui.pk_rt||'')}<div class="row" style="margin-top:10px"><button class="btn s g" data-a="rng" data-v="0">Mark busy</button><button class="btn s g" data-a="rng" data-v="1">Mark free</button></div></div>`}
+function view(){
+if(!FIREBASE_CONFIG.apiKey)return'<div class="empty"><b>Add your Firebase config</b><p class="mut">See the steps at the top of this file.</p></div>';
+if(!store)return'<div class="empty mut">Loading…</div>';
+if(!S.authed)return`<div style="max-width:420px;margin:8vh auto 0;text-align:center"><div style="display:grid;place-items:center;filter:drop-shadow(0 14px 28px #4b3fd655)">${MARK(88)}</div><div style="font-size:2.2rem;font-weight:700;letter-spacing:-.04em;margin-top:12px">Freehu</div><h1 style="margin-top:16px">${LS.get('fh_j')?'You’re invited 🎉':'Free, who?'}</h1><p class="mut" style="margin-bottom:24px">${LS.get('fh_j')?'Sign in and you’ll join the group straight away.':'See when your friends and family are free, without the group-chat back and forth.'}</p><div class="card"><button class="btn w" data-a="google" style="margin-bottom:10px">Continue with Google</button><button class="btn g w" data-a="guest">Try as guest</button><p class="mut" style="font-size:.85rem;margin:12px 0 0">Google keeps your account safe. Guests can sign in later to save it.</p></div></div>`;
+if(!S.me)return'<div class="empty mut">Loading…</div>';
+if(ui.view=='settings')return banners()+settingsView();
+if(ui.view=='home'&&isHub())return banners()+hubView();
+const v=ui.view,g=ui.gid||(v=='insights'?gids()[0]:ui.gid),G=S.G[g];
+if(v=='me'){const m=S.me;return banners()+`<div class="card row nw" style="gap:16px">${av({e:m.emoji,ph:m.ph},S.uid)}<span class="f1"><b style="font-size:1.15rem">${esc(m.name)}</b>${m.un?` <small>@${esc(m.un)}</small>`:''}<br><small>${esc(m.bio||'Add a bio so friends know you')}</small><br><small>🕒 ${esc(tzLbl(myTz()))} · ${clk(Date.now(),myTz())}</small></span><button class="btn s g" data-a="editp">Edit profile</button></div><h1>My hours</h1><div class="cols"><div>${exceptions()}</div><div>${hoursEditor()}</div></div>`}
+if(!g||!G)return banners()+(g?'<div class="empty mut">Loading…</div>':`<h1>Hi ${esc(S.me.name)} 👋</h1><p class="mut">Make a group or join one to see who’s free.</p>${groupForms()}`);
+const ms=Object.entries(G.m||{}).map(([u,m])=>({u,m,e:eff(m)})),fr=ms.filter(x=>x.e.st=='free'),mine=eff(myEntry(g));
+if(v=='insights'){const all=Object.entries(G.m||{}),gl=S.me.gl||[],chips=`<div class="row" style="margin:0 0 14px">${gl.map(x=>`<button class="chip ${x.i==g?'on':''}" data-a="igrp" data-id="${x.i}">${esc(x.e)} ${esc(x.n)}</button>`).join('')}</div>`;
+if(all.length<2)return banners()+startCard()+`<h1>When’s everyone free?</h1>${chips}<div class="card empty">${ILF}<b>Insights need friends</b><p class="mut">Invite at least one person to see when you’re all free.</p><button class="btn" data-a="invite" data-id="${g}">Invite someone</button></div>`;
+const ex=ui.iex||[],ms=all.filter(([u])=>!ex.includes(u)),N=ms.length,L=ui.il||2,
+who=`<small class="mut" style="display:block;margin:0 0 6px">Who’s coming? Tap to leave someone out.</small><div class="row nw" style="gap:10px;overflow-x:auto;padding:2px 0 10px">${all.map(([u,m])=>`<button data-a="iwho" data-id="${u}" style="text-align:center;flex:none;width:58px;opacity:${ex.includes(u)?.3:1}">${av(m,u)}<br><small>${esc((u==S.uid?'You':m.n||'').slice(0,7))}</small></button>`).join('')}</div>`,
+dur=`<div class="seg w" style="margin:0 0 16px">${[1,2,3].map(n=>`<button class="${L==n?'on':''}" data-a="idur" data-n="${n}">${n} hour${n>1?'s':''}</button>`).join('')}</div>`;
+if(N<2)return banners()+startCard()+`<h1>When’s everyone free?</h1>${chips}${who}${dur}<div class="card empty"><b>Pick at least two people</b><p class="mut">Tap the faces above to choose who is coming.</p></div>`;
+const n0=new Date();n0.setMinutes(0,0,0);const t0=n0.getTime()+36e5,sl=Array.from({length:168},(_,i)=>t0+i*36e5),td=lp(Date.now()),
+dayO=i=>{const k=new Date(Date.UTC(td.y,td.mo,td.d+i));return{y:k.getUTCFullYear(),mo:k.getUTCMonth(),d:k.getUTCDate(),wd:(k.getUTCDay()+6)%7}},days=Array.from({length:7},(_,i)=>dayO(i)),
+cellOf=(d,k)=>{let b={n:-1,t:0};for(let h=BK[k][1];h<=BK[k][2]-L;h++){const t=wall(d.y,d.mo,d.d,h);if(t<Date.now())continue;const n=ms.filter(x=>allFree(x[1],t,L)).length;if(n>b.n)b={n,t}}return b},
+bt=best({m:Object.fromEntries(ms),gz:G.gz},L,3),top=bt[0],fr0=top?ms.filter(([u,m])=>allFree(m,top.t,L)):[],no0=top?ms.filter(([u,m])=>!allFree(m,top.t,L)):[],
+bn=ms.map(([u,m])=>({u,m,c:sl.filter(t=>{const h=H(t);return h>=8&&h<=21&&!allFree(m,t,L)&&ms.every(([v,o])=>v==u||allFree(o,t,L))}).length})).sort((a,b)=>b.c-a.c)[0],
+me=G.m[S.uid],mf=me?sl.filter(t=>isFree(me,t)).length:0,rk=all.map(([u,m])=>[u,m,sl.filter(t=>isFree(m,t)).length]).sort((a,b)=>b[2]-a[2]),mxf=Math.max(1,...rk.map(x=>x[2]));
+const bestOf=d=>{let b={n:-1,t:0};for(let k=0;k<BK.length;k++){const c=cellOf(d,k);if(c.n>b.n)b=c}return b},
+shade=n=>n<=0?'var(--fill)':`color-mix(in srgb,var(--acc) ${Math.round(n/N*70)}%,var(--fill))`,
+vm=ui.ivm=='m'?'m':'w',
+vt=`<div class="seg w vt"><button class="${vm=='w'?'on':''}" data-a="ivm" data-v="w">Week</button><button class="${vm=='m'?'on':''}" data-a="ivm" data-v="m">Month</button></div>`,
+strip=(()=>{const bs=days.map(d=>({d,c:bestOf(d)})),mx=Math.max(0,...bs.map(x=>x.c.n));return`<div class="wstrip">${bs.map(({d,c})=>{const off=c.n<0,all=!off&&c.n==N,best=!off&&c.n==mx&&mx>0&&!all;return`<button class="wt ${off?'off':''} ${all?'all':''} ${best?'best':''}" data-a="newplan" data-t="${c.t}"><small><b>${DN[d.wd]}</b> ${d.d}</small><b class="n">${off?'–':all?'✓ all':c.n+'/'+N}</b><small>${off?'passed':tr(G,c.t,L).replace(' to ','–')}</small></button>`}).join('')}</div><small class="mut" style="display:block;margin:-2px 0 14px">Best window each day. Tap one to plan it.</small>`})(),
+mon=(()=>{const off=Math.max(0,Math.min(6,ui.imo||0)),f=new Date(Date.UTC(td.y,td.mo+off,1)),dim=new Date(Date.UTC(f.getUTCFullYear(),f.getUTCMonth()+1,0)).getUTCDate(),w0=(f.getUTCDay()+6)%7,cs=[];
+for(let i=1;i<=dim;i++){const d={y:f.getUTCFullYear(),mo:f.getUTCMonth(),d:i,wd:(w0+i-1)%7};cs.push({d,c:bestOf(d)})}
+const mx=Math.max(0,...cs.map(x=>x.c.n));
+return`<div class="card"><div class="row sp nw" style="margin-bottom:12px"><button class="icb" data-a="imo" data-v="-1" aria-label="Previous month" ${off<1?'disabled style="opacity:.3"':''}>‹</button><b>${new Intl.DateTimeFormat('en-GB',{month:'long',year:'numeric',timeZone:'UTC'}).format(f)}</b><button class="icb" data-a="imo" data-v="1" aria-label="Next month" ${off>=6?'disabled style="opacity:.3"':''}>›</button></div><div class="mcal">${DN.map(n=>`<span class="mh">${n.slice(0,2)}</span>`).join('')}${'<span class="md e"></span>'.repeat(w0)}${cs.map(({d,c})=>{const o=c.n<0,all=!o&&c.n==N,best=!o&&c.n==mx&&mx>1&&!all;return`<button class="md ${o?'off':''} ${all?'all':''} ${best?'best':''}" ${o?'':`data-a="newplan" data-t="${c.t}"`} style="${all||o?'':`background:${shade(c.n)}`}">${d.d}<small>${o?'':all?'all':c.n+'/'+N}</small></button>`}).join('')}</div><small class="mut" style="display:block;margin-top:12px">Number shows how many are free in each day’s best window. Outlined = best days. Tap a day to plan.</small></div>`})();
+const hero=top?`<div class="card hero" style="margin-top:0"><small style="opacity:.85;font-weight:700;letter-spacing:.05em">⭐ BEST TIME TO MEET</small><div style="font-size:1.75rem;font-weight:700;letter-spacing:-.03em;margin:8px 0 2px">${dg(G,top.t)}</div><div style="font-size:1.15rem;opacity:.95">${tr(G,top.t,L)}</div><p style="margin:10px 0 0;opacity:.92">${top.n==N?'Everyone is free 🎉':`${top.n} of ${N} are free${no0.length?` · ${no0.slice(0,3).map(([u,m])=>esc(m.n)).join(', ')} can’t`:''}`}</p><div class="row nw" style="margin-top:14px;padding-left:8px">${fr0.slice(0,8).map(([u,m])=>av(m,u)).join('')}</div><button class="btn w" style="background:#fff!important;color:#3b30b5;margin-top:16px" data-a="newplan" data-t="${top.t}">Plan it</button></div>`:`<div class="card hero" style="margin-top:0"><b style="font-size:1.2rem">No shared time yet</b><p style="margin:8px 0 0;opacity:.9">Nothing lines up in the next 7 days. Try fewer people or a shorter time.</p></div>`;
+const others=bt.length>1?`<h2>Other good times</h2><div class="card lst">${bt.slice(1).map(w=>`<div class="lrow"><span class="f1"><b>${dg(G,w.t)}</b><br><small>${tr(G,w.t,L)} · ${w.n} of ${N} free</small></span><button class="btn s" data-a="newplan" data-t="${w.t}">Plan</button></div>`).join('')}</div>`:'';
+const usual=(()=>{const S2=Array.from({length:7},()=>[0,0,0,0]),C2=Array.from({length:7},()=>[0,0,0,0]);for(let i=0;i<28;i++){const d=dayO(i);BK.forEach((b,k)=>{const c=cellOf(d,k);if(c.n>=0){S2[d.wd][k]+=c.n;C2[d.wd][k]++}})}let bw=-1,bk=0,bv=0;S2.forEach((r,w)=>r.forEach((v,k)=>{const a2=C2[w][k]?v/C2[w][k]:0;if(a2>0&&a2>=bv){bv=a2;bw=w;bk=k}}));return bw>=0&&bv>=2?`Most weeks, <b>${FD[bw]} ${BK[bk][0].toLowerCase()}s</b> work best. About ${bv.toFixed(1)} of ${N} are free then.`:''})();
+const pat=usual?`<div class="card"><b>📈 Your group’s pattern</b><p style="margin:8px 0 0">${usual}</p></div>`:'';
+const tip=bn&&bn.c>0?`<div class="card"><b>💡 Tip</b><p style="margin:8px 0 0">Everyone except ${av(bn.m,bn.u)} <b>${esc(bn.m.n)}</b> is free for <b>${bn.c}</b> time slot${bn.c>1?'s':''} this week. A little flexibility from ${esc(bn.m.n)} would unlock ${bn.c>1?'them':'it'}.</p></div>`:'';
+const tzs=[...new Set(ms.map(([u,m])=>m.tz||myTz()))],zone=tzs.length>1?(()=>{const awake=(m,h)=>{const lh=lp(wall(td.y,td.mo,td.d,h),m.tz||myTz()).h;return lh>=8&&lh<23},ov=rng(0,24).filter(h=>ms.every(([u,m])=>awake(m,h))),runs=[];let st=null;for(let h=0;h<=24;h++){const f=h<24&&ov.includes(h);if(f&&st===null)st=h;if(!f&&st!==null){runs.push([st,h]);st=null}}
+return`<div class="card"><b>🌍 Time zones</b><p class="mut" style="margin-top:6px">${runs.length?`Everyone is awake ${runs.slice(0,2).map(r=>fmt(r[0])+' to '+fmt(r[1])).join(' and ')} (your time).`:'There is no hour when everyone is awake, so someone will need an early or late call.'}</p><div class="tzg">${ms.slice(0,10).map(([u,m])=>`<div class="tzr"><small>${esc((u==S.uid?'You':m.n||'').slice(0,8))}</small><div class="tzb">${rng(0,24).map(h=>`<i class="${awake(m,h)?(ov.includes(h)?'ov':'aw'):''}"></i>`).join('')}</div></div>`).join('')}<div class="tzr"><span></span><div class="tzax"><small>12a</small><small>6a</small><small>12p</small><small>6p</small><small>12a</small></div></div></div><small class="mut" style="display:block;margin-top:8px">Green = everyone awake (8am to 11pm for each person).</small></div>`})():'';
+const grid=`<div class="grid" style="grid-template-columns:54px repeat(4,1fr)"><span></span>${BK.map(b=>`<small>${b[0]}</small>`).join('')}${days.map(d=>`<small style="text-align:left;line-height:1.2"><b>${DN[d.wd]}</b><br>${d.d}</small>${BK.map((b,k)=>{const c=cellOf(d,k);if(c.n<0)return'<span class="cell" style="opacity:.3"></span>';const ev=c.n==N;return`<button class="cell" data-a="newplan" data-t="${c.t}" style="font-weight:700;font-size:.95rem;${ev?'background:var(--ok);color:#fff':`background:color-mix(in srgb,var(--acc) ${Math.round(c.n/N*70)}%,var(--fill))`}">${ev?'✓ all':c.n+'/'+N}</button>`}).join('')}`).join('')}</div>`;
+const more=ui.im?(()=>{const hrs=rng(8,24),tot={};sl.forEach(t=>{const k=dk(t);tot[k]=(tot[k]||0)+ms.filter(x=>isFree(x[1],t)).length});const d7=days.map(d=>{const k=ymd(d.y,d.mo,d.d),n=sl.filter(t=>dk(t)==k).length,v=tot[k]||0;return{d,pct:n?Math.round(v/(n*N)*100):0}}),mx=Math.max(...d7.map(x=>x.pct));
+return`<div class="card"><b>Hour by hour</b><p class="mut">Darker green means more of the group is free. Tap a slot to plan it.</p><div class="heatw"><div class="heat"><span></span>${hrs.map(h=>`<small>${h%2?'':fmt(h).replace('am','a').replace('pm','p')}</small>`).join('')}${days.map(d=>`<small style="text-align:left"><b>${DN[d.wd]}</b></small>${hrs.map(h=>{const t=wall(d.y,d.mo,d.d,h),n=ms.filter(x=>isFree(x[1],t)).length;return`<button class="hc" data-a="newplan" data-t="${t}" title="${n}/${N} free" style="${t<Date.now()-36e5?'opacity:.25;pointer-events:none;':''}background:${n==N?'var(--ok)':n?`color-mix(in srgb,var(--ok) ${Math.round(n/N*75)}%,var(--fill))`:'var(--fill)'}"></button>`}).join('')}`).join('')}</div></div></div><div class="card"><b>Which days work best</b><p class="mut">How much of each day the group is free on average.</p><div class="dbars">${d7.map(x=>`<div class="db"><small><b>${x.pct}%</b></small><div class="tr"><i style="height:${Math.max(4,x.pct)}%;${x.pct==mx?'background:var(--ok)':''}"></i></div><small>${DN[x.d.wd]}</small></div>`).join('')}</div></div>`})():'';
+return banners()+startCard()+`<div class="row sp nw" style="gap:12px"><h1>When’s everyone free?</h1><button class="btn" data-a="newplan">+ Make a plan</button></div>${chips}<p class="mut" style="margin:-6px 0 14px">Plan goes to ${esc(((gl.find(x=>x.i==g)||{}).n)||'your group')} · ${vm=='m'?'Month view':'Next 7 days'} · times in ${esc(tzLbl(myTz()))}</p>${who}${dur}<div class="card qa"><b>Quick update</b><p class="mut" style="margin:4px 0 10px">Changed plans? Tell your group in one tap.</p><div class="row"><button class="chip" data-a="qa" data-k="tonight">🌙 Free tonight</button><button class="chip" data-a="qa" data-k="wkend">🎉 Free this weekend</button><button class="chip" data-a="qa" data-k="busyday">😴 Busy today</button><button class="chip" data-a="qa" data-k="busywk">✈️ Busy this weekend</button></div></div>${vt}${vm=='m'?mon:strip}<div class="insg"><div>${hero}${others}${pat}${tip}</div><div>${zone}<div class="card"><b>Week at a glance</b><p class="mut">Tap a box to plan it. Darker means more friends are free.</p>${grid}</div><button class="btn g w" style="margin:4px 0 14px" data-a="insmore">${ui.im?'Hide details':'Show hour-by-hour and charts'}</button>${more}<div class="card"><b>Who’s free the most</b><p class="mut">Free hours this week, and how much of your free time you share.</p>${rk.map(([u,m,f])=>{const sh=u==S.uid?'':me&&mf?Math.round(sl.filter(t=>isFree(m,t)&&isFree(me,t)).length/mf*100)+'% with you':'';return`<div class="person">${av(m,u)}<span class="f1"><b>${esc(m.n)}${u==S.uid?' (you)':''}</b><br><small>${sh||'&nbsp;'}</small><div class="bar"><i style="width:${Math.round(f/mxf*100)}%"></i></div></span><span class="pill">${f}h free</span></div>`}).join('')}</div></div></div>`}
+if(v=='plans'){const now=Date.now(),pl=Object.entries(G.p||{}).filter(x=>planStart(x[1])+x[1].l*36e5>now-36e5).sort((a,b)=>planStart(a[1])-planStart(b[1]));
+return banners()+`<div class="row sp nw"><h1>Plans</h1><button class="btn" data-a="newplan">+ New plan</button></div><p class="mut">Pick a time, then see who’s in.</p>${pl.length?weekGrid(G,pl):''}${pl.length?`<div class="pgrid">${pl.map(([i,p])=>planCard(G,i,p)).join('')}</div>`:'<div class="card empty">'+ILP+'<b>No plans yet</b><p class="mut">Make one, then friends can say in, maybe or can’t.</p></div>'}`}
+const t=best(G,2,3),row=x=>`<button class="person" data-a="prof" data-id="${x.u}">${av(x.m,x.u,x.e.st=='free')}<span class="f1"><b>${esc(x.m.n)}${x.u==S.uid?' (you)':''}</b>${x.m.un?` <small>@${esc(x.m.un)}</small>`:''}<br><small>${esc(stTxt(x.e))}${x.m.nt?` · “${esc(x.m.nt)}”`:''}</small>${x.u!=S.uid&&x.m.tz&&x.m.tz!=myTz()?`<br><small>🕒 ${clk(Date.now(),x.m.tz)} for them${lateFor(x.m)?' 🌙':''}</small>`:''}</span><span class="pill ${x.e.st}">${x.e.st=='free'?'Free':'Busy'}</span></button>`;
+return banners()+rail()+`<div class="row sp nw" style="margin:4px 0 2px"><h1 style="margin:0">${esc(G.emoji)} ${esc(G.name)}</h1><button class="icb" data-a="invite" data-id="${g}" aria-label="Invite friends">${I('<path d="M12 3v12M8 7l4-4 4 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7"/>')}</button></div><p class="sub">${fr.length} of ${ms.length} free now · ${gzBtn(G)} · <button class="lnk" data-a="copycode" data-id="${g}">${g}</button></p>`+startCard()+pingBar(G)+`<div class="topcards">${nowbar(g,fr,ms)}${nudge(G,t)}</div>`+`${ms.length==1?`<div class="banner"><span class="f1"><b>It’s just you here 👋</b><br><small>Invite a friend. Freehu only works when your people join.</small></span><button class="btn s" data-a="invite" data-id="${g}">Invite a friend</button></div>`:''}<div class="cols c3"><div><div class="card stc"><div class="row sp"><b>My status</b><small>${esc(stTxt(mine))}</small></div><div class="seg w" style="margin:12px 0"><button class="${mine.st=='free'?'on fr':''}" data-a="st" data-k="free">I’m free</button><button class="${mine.st=='busy'?'on bz':''}" data-a="st" data-k="busy">I’m busy</button></div>
+<button class="chip notechip" data-a="note">${esc(S.me.nt||'Add a note')}</button><div class="row dur" style="margin-top:10px">${[[1,'1 hour'],[2,'2 hours'],[4,'4 hours'],[0,'Today']].map(d=>`<button class="chip ${ui.dur==d[0]?'on':''}" data-a="dur" data-n="${d[0]}">${d[1]}</button>`).join('')}${mine.manual?'<button class="chip" data-a="auto">Use my hours</button>':''}</div><button class="btn g w" style="margin-top:14px" data-a="freenow">Tell friends I’m free now</button></div><h2>Best times to meet</h2>${t.length?`<div class="card lst">${t.map(w=>`<div class="lrow"><span class="f1"><b>${dg(G,w.t)}</b><br><small>${tr(G,w.t,2)} · ${w.n} of ${w.tot} free</small></span><button class="btn s" data-a="newplan" data-t="${w.t}">Plan</button></div>`).join('')}</div>`:'<div class="card mut">No overlap yet. Ask everyone to add their hours.</div>'}
+</div>
+<div><div class="card lst frcard"><div class="row sp" style="padding:14px 0 2px"><b>Friends</b><small>${ms.length}</small></div>${ms.sort((a,b)=>(b.e.st=='free')-(a.e.st=='free')).map(row).join('')}</div></div><div><div class="row sp nw"><h2>Plans</h2><button class="btn s" data-a="newplan">+ New plan</button></div>${(()=>{const up=Object.entries(G.p||{}).filter(x=>planStart(x[1])+x[1].l*36e5>Date.now()-36e5).sort((a,b)=>planStart(a[1])-planStart(b[1])).slice(0,2);return up.length?up.map(([i,p])=>planCard(G,i,p)).join(''):'<div class="card empty">'+ILP+'<b>No plans yet</b><p class="mut">Pick a time above or make your own, then friends reply in, maybe or can’t.</p></div>'})()}</div></div><button class="fab" data-a="newplan" aria-label="New plan"><span>＋</span>Plan</button>`}
+function sheet(){const s=ui.sheet,G=S.G[ui.gid];const X=`<button class="x" data-a="close" aria-label="Close">✕</button>`,W=b=>`<div class="scrim" data-a="close"><div class="sheet" data-a="stop" role="dialog" aria-modal="true">${b}</div></div>`;
+if(s.k=='ping'){const P=[['🍽️','Food'],['☕','Coffee'],['🚶','Walk'],['🏋️','Gym'],['🎮','Games'],['📞','Call'],['🎬','Movie'],['🍻','Drinks']],gn=((S.me.gl||[]).find(x=>x.i==ui.gid)||{}).n||'the group';return W(`<div class="row sp"><h2 style="margin:0">Who’s up for something?</h2>${X}</div><p class="mut" style="margin-top:6px">Pick one. Everyone in ${esc(gn)} gets a nudge and can reply in one tap.</p><div class="pkgrid">${P.map(p=>`<button class="pc" data-a="pingsend" data-e="${p[0]}" data-t="${p[1]}"><span>${p[0]}</span>${p[1]}</button>`).join('')}</div><button class="btn g w" style="margin-top:14px" data-a="newplan">Plan it for later instead</button>`)}
+if(s.k=='inv'){const g=s.g,gl=(S.me.gl||[]).find(x=>x.i==g)||{};return W(`<div class="row sp"><h2 style="margin:0">Invite to ${esc(gl.e||'')} ${esc(gl.n||'your group')}</h2>${X}</div><p class="mut" style="margin-top:6px">Friends tap the link, sign in, and they’re in. No code needed.</p><button class="btn fr w" style="margin-top:12px" data-a="invwa">Share on WhatsApp</button><button class="btn g w" style="margin-top:10px" data-a="invcp">Copy link</button>${navigator.share?'<button class="btn g w" style="margin-top:10px" data-a="invsh">More options</button>':''}<div class="card" style="margin:16px 0 0;text-align:center"><small>Or enter this code in the app</small><div class="code">${esc(g)}</div></div>`)}
+if(s.k=='edit'){const ph=ui.ph===undefined?S.me.ph:ui.ph,em=ui.em||S.me.emoji;return W(`<div class="row sp"><h2 style="margin:0">Edit profile</h2>${X}</div><div class="row nw" style="margin:18px 0"><span style="display:inline-block;transform:scale(1.5);margin:0 16px 0 8px">${av({e:em,ph},S.uid)}</span><button class="btn s g" data-a="photo">Upload photo</button>${ph?'<button class="btn s d" data-a="rmph">Remove</button>':''}<input type="file" accept="image/*" class="pfile" hidden></div><div class="row">${AVS.map(e=>`<button class="chip ${em==e?'on':''}" data-a="em" data-e="${e}">${e}</button>`).join('')}</div><label class="l">Name</label><input type="text" id="pn" maxlength="20" value="${esc(S.me.name||'')}"><label class="l">Username</label><input type="text" id="pu" placeholder="e.g. sam.k" maxlength="20" value="${esc(S.me.un||'')}"><label class="l">Bio</label><input type="text" id="pb" maxlength="80" placeholder="A line about you" value="${esc(S.me.bio||'')}"><label class="l">Time zone</label>${tzPick('ptz',myTz())}<small style="display:block;margin-top:6px">Friends see your free times converted into their own time zone.</small><div class="row sp nw" style="margin:16px 0"><span class="f1"><b>Show when I’m online</b><br><small>Friends see a green dot while you’re here.</small></span><button class="chip ${ui.ho?'':'on'}" data-a="tho">${ui.ho?'Off':'On'}</button></div><button class="btn w" data-a="savep">Save</button>`)}
+if(s.k=='privacy')return W(`<div class="row sp"><h2 style="margin:0">Privacy</h2>${X}</div><p><b>What Freehu stores:</b> your name, emoji or photo, bio, username, time zone, weekly hours, busy dates and the groups you join.</p><p><b>Who sees it:</b> only people in your groups see your name, photo, status, hours and time zone. Nobody else can.</p><p><b>Google Calendar:</b> if you import it, Freehu only reads busy or free times. Event titles and details are never read or stored.</p><p><b>Where it lives:</b> in Google Firebase. We don’t sell your data or show ads.</p><p><b>Your control:</b> you can delete your account and all your data at any time from My hours.</p>`);
+if(s.k=='del')return W(`<div class="row sp"><h2 style="margin:0">Delete account?</h2>${X}</div><p>This removes your profile and hours and takes you out of every group. It can’t be undone.</p><div class="row"><button class="btn d" data-a="delgo">Delete everything</button><button class="btn g" data-a="close">Cancel</button></div>`);
+if(s.k=='gsw'){const gs=S.me.gl||[];return W(`<div class="row sp nw"><h2 style="margin:0">Join or create a group</h2>${X}</div><div style="margin-top:14px">${groupForms()}</div>${gs.length?`<h2>Your groups</h2><div class="card lst">${gs.map(x=>`<div class="lrow"><button class="row nw f1" style="gap:12px;text-align:left" data-a="pick" data-id="${x.i}"><span class="gi sm" style="--h:${gh(x.i)}">${esc(x.e)}</span><span class="f1"><b>${esc(x.n)}</b><br><small>Code ${x.i}</small></span></button><button class="btn s g" data-a="invite" data-id="${x.i}">Invite</button><button class="btn s d" data-a="leave" data-id="${x.i}">Leave</button></div>`).join('')}</div>`:''}`)}
+if(s.k=='free'){const ms=Object.entries(G.m||{}).map(([u,m])=>({u,m,e:eff(m)})),fr=ms.filter(x=>x.e.st=='free'),soon=ms.filter(x=>x.e.st!='free'&&x.e.until&&x.e.until-Date.now()<8*36e5).sort((a,b)=>a.e.until-b.e.until),nh=Math.ceil(Date.now()/36e5)*36e5,r=x=>`<button class="person" data-a="prof" data-id="${x.u}">${av(x.m,x.u,x.e.st=='free')}<span class="f1"><b>${esc(x.m.n)}${x.u==S.uid?' (you)':''}</b><br><small>${esc(stTxt(x.e))}</small>${x.u!=S.uid&&x.m.tz&&x.m.tz!=myTz()?`<br><small>🕒 ${clk(Date.now(),x.m.tz)} for them${lateFor(x.m)?' 🌙':''}</small>`:''}</span><span class="pill ${x.e.st}">${x.e.st=='free'?'Free':'Soon'}</span></button>`;
+return W(`<div class="row sp"><h2 style="margin:0">${fr.length?'🟢 Free right now':'Nobody’s free right now'}</h2>${X}</div><p class="mut" style="margin:6px 0 0">${fr.length} of ${ms.length} in ${esc(G.name)} · times in ${esc(tzLbl(myTz()))}</p>${fr.length?`<div class="card lst" style="margin-top:14px">${fr.map(r).join('')}</div>`:'<div class="card mut" style="margin-top:14px">Everyone is busy at the moment.</div>'}${soon.length?`<h2>Free soon</h2><div class="card lst">${soon.map(r).join('')}</div>`:''}${fr.length>1?`<button class="btn w" data-a="newplan" data-t="${nh}">📅 Plan something now</button>`:''}`)}
+if(s.k=='prof'){const m=G?.m[s.id];if(!m)return'';const e=eff(m),t0=Date.now(),sl=Array.from({length:168},(_,i)=>t0+i*36e5),fh=sl.filter(t=>isFree(m,t)).length,pj=Object.values(G.p||{}).filter(p=>(p.r?.[s.id]||((p.in||[]).includes(s.id)?'in':''))=='in').length,me=G.m[S.uid],a=me?sl.filter(t=>isFree(me,t)).length:0,mt=s.id!=S.uid&&a?Math.round(sl.filter(t=>isFree(me,t)&&isFree(m,t)).length/a*100)+'%':'–';
+return W(`<div class="row" style="justify-content:flex-end">${X}</div><div style="text-align:center"><span style="display:inline-block;transform:scale(1.6);margin:18px 0 22px">${av(m,s.id,e.st=='free')}</span><h2 style="margin:0">${esc(m.n)}</h2>${m.un?`<small>@${esc(m.un)}</small>`:''}${m.b?`<p style="margin:10px 0 0">${esc(m.b)}</p>`:''}${m.tz?`<p class="mut" style="margin:8px 0 0"><small>🕒 ${esc(tzLbl(m.tz))} · ${clk(Date.now(),m.tz)} there${m.tz!=myTz()?' ('+dfs(m.tz)+')':''}</small></p>`:''}${s.id!=S.uid?`<p style="margin:8px 0 0;color:var(--acc)"><small>${esc(winTxt(m))}</small></p>`:''}<div class="row" style="justify-content:center;margin-top:12px"><span class="pill ${e.st}">${esc(stTxt(e))}</span>${isOn(m)?'<span class="pill free">🟢 Online</span>':''}</div></div><div class="row nw" style="margin:20px 0">${[[fh+'h','free this week'],[pj,'plans going'],[mt,'free time shared']].map(x=>`<div class="card f1" style="text-align:center;margin:0;padding:12px 6px"><b style="font-size:1.3rem">${x[0]}</b><br><small>${x[1]}</small></div>`).join('')}</div><b>Usual week</b>${m.tz&&m.tz!=myTz()?' <small>(in your time zone)</small>':''}<div class="grid" style="margin-top:10px"><span></span>${BK.map(b=>`<small>${b[0]}</small>`).join('')}${DN.map((n,d)=>`<b>${n}</b>${BK.map(b=>{const r=rng(b[1],b[2]),c=r.filter(h=>vfree(m,d,h)).length;return`<span class="cell ${c==r.length?'full':c?'part':''}" style="min-height:28px"></span>`}).join('')}`).join('')}</div><button class="btn w" style="margin-top:18px" data-a="newplan">Make a plan together</button>${s.id!=S.uid?`<button class="btn g w" style="margin-top:10px" data-a="wave" data-id="${s.id}">👋 Wave at ${esc(m.n)}</button>`:''}`)}
+if(s.k=='day'||s.k=='wday'){const dy=s.k=='day',cur=sheetMask(),ov=dy&&S.me.dm?.[s.d]!=null;return W(`<div class="row sp"><h2 style="margin:0">${dy?fmtD(s.d+'T12:00'):'Every '+FD[s.d]}</h2>${X}</div><p class="mut" style="margin-top:6px">${dy?(ov?'You changed this date.':'Using your usual week.'):'This repeats every week.'} Pick the parts of the day you’re free.</p><div class="row nw" style="margin:14px 0">${BK.map((b,i)=>{const bm=pack(rng(b[1],b[2])),on=(cur&bm)==bm;return`<button class="chip f1 ${on?'on':''}" style="min-height:60px;border-radius:16px" data-a="dblk" data-i="${i}">${b[0]}<br><small style="color:inherit">${fmt(b[1])}–${fmt(b[2])}</small></button>`}).join('')}</div><b>Or pick exact hours</b><div class="hg" style="margin:10px 0 16px">${rng(6,30).map(h=>`<button class="hb ${(cur>>(h-6))&1?'on':''}" data-a="dhr" data-h="${h}">${fmt(h)}</button>`).join('')}</div><div class="row"><button class="btn s fr" data-a="dday" data-v="free">Free all day</button><button class="btn s bz" data-a="dday" data-v="busy">Busy all day</button>${ov?'<button class="btn s g" data-a="dday" data-v="reset">Back to my usual week</button>':''}${dy?'':'<button class="btn s g" data-a="wcp" data-w="all">Copy to every day</button><button class="btn s g" data-a="wcp" data-w="wk">Copy to weekdays</button><button class="btn s g" data-a="wcp" data-w="we">Copy to weekend</button>'}</div>`)}
+if(s.k=='cfm')return W(`<h2 style="margin:0 0 6px">${esc(s.t)}</h2><p class="mut">${esc(s.m)}</p><div class="row nw" style="margin-top:18px"><button class="btn g f1" data-a="cx">Cancel</button><button class="btn d f1" data-a="${s.a}" data-id="${esc(s.id)}">${esc(s.b)}</button></div>`);
+if(s.k=='gz')return W(`<div class="row sp"><h2 style="margin:0">Group time zone</h2>${X}</div><p class="mut" style="margin-top:6px">Plans and best times show in this zone first, and in each person’s own time too. Personal hours are not affected.</p><label class="l">Time zone</label>${tzPick('gzs',gzo(G))}<button class="btn w" style="margin-top:16px" data-a="savegz">Save</button>`);
+if(s.k=='note')return W(`<div class="row sp"><h2 style="margin:0">Add a note</h2>${X}</div><p class="mut" style="margin-top:6px">A few words friends see next to your status.</p><input type="text" id="nt" maxlength="40" placeholder="e.g. free till 6" value="${esc(S.me.nt||'')}" style="margin-top:10px"><div class="row nw" style="margin-top:16px"><button class="btn f1" data-a="savenote">Save</button>${S.me.nt?'<button class="btn g" data-a="clrnote">Clear</button>':''}</div>`);
+if(s.k=='plan'){const t=s.t||Date.now()+864e5,z=gzo(G),Lz=lp(+t,z);return W(`<div class="row sp"><h2 style="margin:0">New plan</h2>${X}</div><div class="row" style="margin:14px 0">${TY.map((t,i)=>`<button class="chip ${ui.type==i?'on':''}" data-a="tp" data-i="${i}">${t[1]} ${t[0]}</button>`).join('')}</div><input type="text" id="tt" placeholder="Title (optional)" maxlength="40" style="margin-bottom:10px"><input type="text" id="tl" placeholder="Where? (optional)" maxlength="40">
+<label class="l">Date and start${z!=myTz()?` · ${esc(tzLbl(z))} time`:''}</label>${pickG('pd',dateOpts(z),ui.pk_pd||Lz.key)}<label class="l">Start time</label>${pickG('ph',rng(7,23).map(h=>[h,fmt(h)]),ui.pk_ph||Lz.h,'h')}
+<label class="l">Length</label><div class="row">${[1,2,3,4].map(n=>`<button class="chip ${ui.plen==n?'on':''}" data-a="pl" data-n="${n}">${n}h</button>`).join('')}</div><button class="btn w" data-a="mkp" style="margin-top:20px">Create plan</button>`)}return''}
+const ERRV='<div class="empty"><b>Something went wrong</b><p class="mut">Your data is safe. Reload to continue.</p><button class="btn" onclick="location.reload()">Reload</button></div>';
+const safe=(f,d)=>{try{return f()}catch(e){console.error(e);return d}};
+let _sk='';function render(){if(S.authed)watchActive();const vals={};document.querySelectorAll('input,select').forEach(e=>{if(e.id)vals[e.id]=e.value});const fo=document.activeElement&&document.activeElement.id;
+const nav=c=>navList().map(n=>`<button class="${c} ${ui.view==n[0]?'on':''}" data-a="nav" data-v="${n[0]}"><span>${n[1]}</span>${n[2]}</button>`).join('');
+const gm=(S.me?.gl||[]).find(x=>x.i==ui.gid),T=ui.toast?`<div class="toast" role="status" aria-live="polite">${esc(ui.toast)}</div>`:'';
+const dr=ui.menu&&S.me?`<div class="scrim" data-a="menu" style="align-items:stretch;justify-content:flex-start"><aside class="drawer" data-a="stop"><button class="row nw" style="gap:12px;padding:8px 6px 18px;text-align:left" data-a="editp">${av({e:S.me.emoji,ph:S.me.ph},S.uid)}<span class="f1"><b>${esc(S.me.name)}</b><br><small>${S.me.un?'@'+esc(S.me.un):'Edit profile'}</small></span></button>${nav('m')}<hr><small style="padding:0 14px 6px">Groups</small>${(S.me.gl||[]).map(x=>`<button class="m ${!isHub()&&x.i==ui.gid?'on':''}" data-a="pick" data-id="${x.i}"><span>${esc(x.e)}</span>${esc(x.n)}</button>`).join('')}<button class="m" data-a="gsw"><span>＋</span>Join or create group</button><hr>${ip?'<button class="m" data-a="install"><span>📲</span>Install app</button>':''}<button class="m" data-a="privacy"><span>🔒</span>Privacy</button><button class="m" data-a="signout"><span>↩︎</span>Sign out</button></aside></div>`:'';
+document.getElementById('app').innerHTML=!S.authed||!S.me?`<main class="solo"><div>${safe(view,ERRV)}</div></main>${T}`:ui.ob?`<main class="solo"><div>${safe(onboard,ERRV)}</div></main>${T}`:`<header class="top"><button class="ham" data-a="menu" aria-label="Menu">${I('<path d="M4 7h16M4 12h16M4 17h16"/>')}</button>${brand(30)}<button class="gsw" data-a="gsw">${gm?esc(gm.e+' '+gm.n):'Groups'} ▾</button></header>
+<aside class="side" style="gap:4px"><div style="padding:0 10px 20px">${brand(34)}</div>${nav('nv')}<small style="padding:18px 14px 6px">Groups</small>${(S.me.gl||[]).map(x=>`<button class="nv ${!isHub()&&x.i==ui.gid?'on':''}" style="flex-direction:row;justify-content:flex-start" data-a="pick" data-id="${x.i}">${esc(x.e)} ${esc(x.n)}</button>`).join('')}<button class="nv" style="flex-direction:row;justify-content:flex-start" data-a="gsw">＋ Join or create group</button><div class="sfoot"><button class="row nw" data-a="editp">${av({e:S.me.emoji,ph:S.me.ph},S.uid)}<span class="f1"><b>${esc(S.me.name)}</b><br><small>${S.me.un?'@'+esc(S.me.un):'Edit profile'}</small></span></button><small class="kb"><span><kbd>1</kbd>–<kbd>${navList().length}</kbd> switch view</span><span><kbd>N</kbd> new plan</span><span><kbd>F</kbd> free now</span><span><kbd>Esc</kbd> close</span></small></div></aside>
+<main><div>${safe(view,ERRV)}</div></main><nav class="bottom">${nav('')}</nav>${dr}${ui.sheet?(()=>{try{return sheet()}catch(e){console.error(e);ui.sheet=null;return''}})():''}${T}`;
+{document.querySelectorAll('.pk:not(.h) .on').forEach(b=>{const g=b.parentElement;g.scrollLeft=b.offsetLeft-(g.clientWidth-b.offsetWidth)/2});if(ui.tr){ui.tr=0;const mv=document.querySelector('main>div');mv&&mv.classList.add('vin')}const sk=ui.sheet?'s'+ui.sheet.k:ui.menu?'d':'',sc=document.querySelector('.scrim');if(sc&&sk!==_sk){sc.classList.add('pop');const sh=sc.querySelector('.sheet,.drawer');if(sh){sh.tabIndex=-1;sh.focus({preventScroll:true})}}_sk=sk}
+for(const k in vals){const e=document.getElementById(k);if(e)e.value=vals[k]}if(fo){const e=document.getElementById(fo);if(e)e.focus()}}
+
+/* ---- actions ---- */
+async function setStatus(s,u){S.me.s=s;S.me.u=u;render();await store.saveUser(S.uid,{s,u});await forG(g=>store.setMember(g,S.uid,{s,u}))}
+const setH=(d,arr)=>{S.me.av=S.me.av||[0,0,0,0,0,0,0];if(ui.scope!='all'){S.me.gv=S.me.gv||{};S.me.gv[ui.scope]=[...curA(ui.scope)];S.me.gv[ui.scope][d]=pack(arr)}else S.me.av[d]=pack(arr);saveHours()};
+const saveDM=async d=>{const m=dk(Date.now()-864e5);d=Object.fromEntries(Object.entries(d).filter(e=>e[0]>=m));S.me.dm=d;render();await store.saveUser(S.uid,{dm:d});await forG(g=>store.setMember(g,S.uid,{dm:d}))};
+const saveTz=async tz=>{S.me.tz=tz;await store.saveUser(S.uid,{tz});await forG(g=>store.setMember(g,S.uid,{tz,z:zoff(tz,Date.now())}));render()};
+const saveX=async x=>{S.me.x=x;render();await store.saveUser(S.uid,{x});await forG(g=>store.setMember(g,S.uid,{x}))};
+addEventListener('keydown',e=>{if(e.key=='Escape'&&(ui.sheet||ui.menu)){ui.sheet=null;ui.menu=false;render();return}if(!S.authed||!S.me||ui.sheet||e.metaKey||e.ctrlKey||e.altKey||/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;const k=e.key.toLowerCase(),i='12345'.indexOf(k);if(i>=0&&navList()[i]){flush();ui.view=navList()[i][0];render()}else if(k=='n')document.querySelector('[data-a=newplan]')?.click();else if(k=='f')document.querySelector('[data-a=freenow]')?.click()});
+document.addEventListener('click',async e=>{const t=e.target.closest('[data-a]');if(!t)return;const a=t.dataset.a,D=t.dataset;if(navigator.vibrate&&t.closest('button')&&a!='stop')navigator.vibrate(8);if(['invite','st','freenow','newplan','savep','tonight'].includes(a))log('ui_'+a);if(a=='stop')return;if(a=='close'&&e.target.closest('.sheet')&&!t.classList.contains('x'))return;if(a=='close'||a=='cx')ui.pk_ptz=ui.pk_gzs=null;
+try{
+if(a!='menu')ui.menu=false;
+if(a=='cx')ui.sheet=null;else if(a=='menu')ui.menu=!ui.menu;else if(a=='nav'){ui.tr=1;flush();ui.view=D.v;ui.sheet=null}else if(a=='close')ui.sheet=null;else if(a=='gsw')ui.sheet={k:'gsw'};else if(a=='gjoin'||a=='gnew'){ui.gt=a=='gjoin'?'join':'new';ui.sheet={k:'gsw'}}
+else if(a=='hub'){ui.hub=true;ui.sheet=null;ui.view='insights'}
+else if(a=='pick'){ui.gid=D.id;ui.hub=false;ui.sheet=null;ui.view='insights';beat(1)}
+else if(a=='google')await store.google();else if(a=='guest')await store.guest();else if(a=='signout')await store.out();
+else if(a=='link'){await store.link();S.anon=false;toast('Account saved ✓')}
+else if(a=='st'){const u=ui.dur?Date.now()+ui.dur*36e5:(()=>{const a=lp(Date.now());let t=wall(a.y,a.mo,a.d,6);if(t<=Date.now())t=wall(a.y,a.mo,a.d+1,6);return t})();await setStatus(D.k,u);return}
+else if(a=='auto'){await setStatus('auto',0);return}
+else if(a=='obem'){ui.ob.em=D.e;ui.ob.name=document.getElementById('on')?.value??ui.ob.name}
+else if(a=='obnext'){const n=document.getElementById('on').value.trim();if(!n)return toast('Add your name so friends know who you are');const em=ui.ob.em||S.me.emoji||AVS[0];Object.assign(S.me,{name:n,emoji:em});ui.ob.name=n;ui.ob.step=1;await store.saveUser(S.uid,{name:n,emoji:em});await forG(g=>store.setMember(g,S.uid,{n,e:em}));render();return}
+else if(a=='obpick'){const i=+D.i,k=ui.ob.picks.indexOf(i);k>=0?ui.ob.picks.splice(k,1):ui.ob.picks.push(i)}
+else if(a=='obback')ui.ob.step=Math.max(0,ui.ob.step-1);
+else if(a=='obhours'){if(ui.ob.picks.length){S.me.av=Array.from({length:7},(_,d)=>pack([...new Set(ui.ob.picks.flatMap(i=>TPL[i][1](d)))]));await pushMe({av:S.me.av,gv:S.me.gv||{}})}ui.ob.step=2}
+else if(a=='obdone'){finishOb()}
+else if(a=='igrp'){ui.gid=D.id;ui.iex=[];beat(1)}else if(a=='iwho'){const e=ui.iex||[],i=e.indexOf(D.id);i>=0?e.splice(i,1):e.push(D.id);ui.iex=e}else if(a=='idur'){ui.il=+D.n}else if(a=='insmore'){ui.im=!ui.im}else if(a=='qa'){await quickAvail(D.k);return}else if(a=='ivm'){ui.ivm=D.v;ui.imo=0}else if(a=='imo'){ui.imo=Math.max(0,Math.min(6,(ui.imo||0)+(+D.v)))}
+else if(a=='savehours'){clearTimeout(wt);dirty=true;await flush();toast('Hours saved ✓');return}
+else if(a=='tzdev'){await saveTz(DEVTZ);toast('Time zone updated ✓');return}else if(a=='tzx'){ui.tzx=1;LS.set('fh_tzx',DEVTZ)}
+else if(a=='dur')ui.dur=+D.n;else if(a=='tp')ui.type=+D.i;else if(a=='pl')ui.plen=+D.n;else if(a=='em')ui.em=D.e;
+else if(a=='scope')ui.scope=D.g;else if(a=='unscope'){delete S.me.gv[ui.scope];ui.scope='all';saveHours()}
+else if(a=='cell'){const A=curA(ui.scope),b=BK[+D.k],r=rng(b[1],b[2]),c=[...Array(24).keys()].map(i=>i+6).filter(h=>bits(A,+D.d,h));setH(+D.d,r.every(h=>c.includes(h))?c.filter(h=>!r.includes(h)):[...new Set([...c,...r])]);return}
+else if(a=='tpl'){const f=Array.from({length:7},(_,d)=>pack(TPL[+D.i][1](d)));if(ui.scope!='all'){S.me.gv=S.me.gv||{};S.me.gv[ui.scope]=f}else S.me.av=f;saveHours();toast('Applied. Tap any time to adjust.');return}
+else if(a=='mon')ui.cm=Math.max(0,Math.min(11,(ui.cm||0)+ +D.n));
+else if(a=='dsel')ui.sheet={k:'day',d:D.k};
+else if(a=='wday')ui.sheet={k:'wday',d:+D.d};
+else if(a=='dblk'){const bm=pack(rng(BK[+D.i][1],BK[+D.i][2])),c=sheetMask();setMask((c&bm)==bm?c&~bm:c|bm);return}
+else if(a=='dhr'){setMask(sheetMask()^(1<<(+D.h-6)));return}
+else if(a=='wcp'){const v=sheetMask();for(let d=0;d<7;d++){if(D.w=='wk'&&d>4||D.w=='we'&&d<5)continue;setM(d,v)}toast('Copied ✓');return}
+else if(a=='dday'){if(D.v=='reset'){const dm={...(S.me.dm||{})};delete dm[ui.sheet.d];await saveDM(dm)}else setMask(D.v=='free'?FULL:0);return}
+else if(a=='rng'){const f=document.getElementById('rf').value,t=document.getElementById('rt').value;if(!f||!t||t<f)return toast('Pick a start and end date');ui.pk_rf=ui.pk_rt=null;const dm={...(S.me.dm||{})},y0=+f.slice(0,4),m0=+f.slice(5,7)-1,d0=+f.slice(8,10);for(let i=0;i<120;i++){const k=ymd(y0,m0,d0+i);if(k>t)break;dm[k]=D.v=='1'?FULL:0}await saveDM(dm);toast('Dates updated ✓');return}
+else if(a=='addx'){const k=document.getElementById('xd').value;if(!k)return toast('Pick a date');await saveX({...(S.me.x||{}),[k]:FULL});toast('Marked busy ✓');return}
+else if(a=='delx'){const x={...(S.me.x||{})};delete x[D.k];await saveX(x);return}
+else if(a=='gcal'){const tok=await store.calToken(),n0=new Date();n0.setMinutes(0,0,0);const t0=n0.getTime(),t1=t0+14*864e5;
+const r=await fetch('https://www.googleapis.com/calendar/v3/freeBusy',{method:'POST',headers:{Authorization:'Bearer '+tok,'Content-Type':'application/json'},body:JSON.stringify({timeMin:new Date(t0).toISOString(),timeMax:new Date(t1).toISOString(),items:[{id:'primary'}]})});if(!r.ok)throw{code:'cal'};
+const bz=(await r.json()).calendars.primary.busy.map(b=>[Date.parse(b.start),Date.parse(b.end)]),x={...(S.me.x||{})},me={tz:myTz()};
+for(let t=t0;t<t1;t+=36e5)if(bz.some(b=>b[0]<t+36e5&&b[1]>t)){const s=slotOf(me,t);x[s.k]=(x[s.k]||0)|(1<<(s.h-6))}
+await saveX(x);toast('Busy times imported ✓');return}
+else if(a=='tonight'){LS.set('fh_m',dk(Date.now()));ui.view='insights'}
+else if(a=='privacy')ui.sheet={k:'privacy'};else if(a=='delask')ui.sheet={k:'del'};
+else if(a=='ping'){const n=Date.now();await setStatus('free',n+2*36e5);S.me.fn=n;await store.saveUser(S.uid,{fn:n});await store.setMember(ui.gid,S.uid,{fn:n});toast('Asked the group who’s up 🙋');return}
+else if(a=='freenow'){await setStatus('free',Date.now()+2*36e5);const n=Date.now();S.me.fn=n;await store.saveUser(S.uid,{fn:n});await forG(g=>store.setMember(g,S.uid,{fn:n}));toast('Your groups have been pinged 🙋');return}
+else if(a=='delgo'){try{await store.delAcct(S.uid,gids(),S.me.un||'')}catch(err){ui.sheet=null;return toast(err.code=='auth/popup-closed-by-user'||err.code=='auth/requires-recent-login'?'Sign in again to confirm, then retry.':'Could not delete. Try again.')}ui.sheet=null;LS.set('fh_n','0')}
+else if(a=='thm'){LS.set('fh_t',D.t);setTheme(D.t)}
+else if(a=='adv'){LS.set('fh_adv',D.v);if(D.v!='1')ui.view='settings'}else if(a=='exo'){ui.exo=!ui.exo}else if(a=='hm')LS.set('fh_h',D.v);else if(a=='hday')ui.hd=+D.d;
+else if(a=='hh'){const A=curA(ui.scope),cur=rng(6,30).filter(x=>bits(A,+D.d,x)),h=+D.h;setH(+D.d,cur.includes(h)?cur.filter(x=>x!=h):[...cur,h]);return}
+else if(a=='notif'){if(LS.get('fh_n')=='1'){LS.set('fh_n','0')}else{if(window.Notification&&Notification.permission=='default')await Notification.requestPermission();LS.set('fh_n','1');toast('Alerts on 🔔');if(VAPID_KEY){try{const tk=await store.pushReg(VAPID_KEY);if(tk)await store.saveUser(S.uid,{tok:tk})}catch(e){}}}}
+else if(a=='install'){ip.prompt();ip=null}
+else if(a=='editp'){ui.em=null;ui.ph=undefined;ui.ho=!!S.me.ho;ui.sheet={k:'edit'}}
+else if(a=='photo'){document.querySelector('.pfile').click();return}else if(a=='rmph')ui.ph='';else if(a=='tho')ui.ho=!ui.ho;
+else if(a=='freelist')ui.sheet={k:'free'};
+else if(a=='prof')ui.sheet={k:'prof',id:D.id};
+else if(a=='savep'){const n=document.getElementById('pn').value.trim();if(!n)return toast('Add a name');const em=ui.em||S.me.emoji,un=document.getElementById('pu').value.toLowerCase().replace(/[^a-z0-9._]/g,'').slice(0,20),b=document.getElementById('pb').value.trim().slice(0,80),ph=ui.ph===undefined?(S.me.ph||''):ui.ph,ho=!!ui.ho,tz=document.getElementById('ptz')?.value||myTz();try{await store.claimUn(un,S.me.un||'',S.uid)}catch(err){return toast(err.code=='un-taken'?'That username is taken':'Could not save username')}Object.assign(S.me,{name:n,emoji:em,un,bio:b,ph,ho,tz});await store.saveUser(S.uid,{name:n,emoji:em,un,bio:b,ph,ho,tz});await forG(g=>store.setMember(g,S.uid,{n,e:em,un,b,ph,tz,z:zoff(tz,Date.now()),ls:ho?0:Date.now()}));ui.sheet=null;toast('Profile saved ✓')}
+else if(a=='gtab'){ui.gt=D.t}else if(a=='gem'){ui.ge=D.e}
+else if(a=='mkg'){const n=document.getElementById('gn').value.trim();if(!n)return toast('Name your group');if(gids().length>=MAXG)return toast('You can be in up to '+MAXG+' groups');const c=rid(6),ge=ui.ge||'👥',gz=document.getElementById('gz')?.value||myTz();ui.ge=null;await store.mkGroup(c,{name:n,emoji:ge,owner:S.uid,gz,members:[S.uid],m:{[S.uid]:myEntry(c)},p:{}});await store.saveUser(S.uid,{gl:[...(S.me.gl||[]),{i:c,n,e:ge}]});ui.gid=c;ui.hub=false;ui.view='insights';ui.sheet=null;ui.ob&&finishOb();toast('Group created 🎉 Now invite a friend.')}
+else if(a=='join'){const raw=document.getElementById('jc').value,mt=raw.match(/join=([A-Za-z0-9]{6})/),c=(mt?mt[1]:raw).toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,6);if(c.length<6)return toast('Enter the 6-letter code');if(gids().includes(c))return toast('You’re already in that group');if(gids().length>=MAXG)return toast('You can be in up to '+MAXG+' groups');const g=await store.getGroup(c);if(!g)return toast('No group with that code');if((g.members||[]).length>=MAXM)return toast('That group is full');await store.join(c,S.uid,myEntry(c));await store.saveUser(S.uid,{gl:[...(S.me.gl||[]),{i:c,n:g.name,e:g.emoji}]});ui.gid=c;ui.view='insights';ui.sheet=null;ui.ob&&finishOb();toast('Joined ✓')}
+else if(a=='leave'){ui.sheet={k:'cfm',a:'leave2',id:D.id,t:'Leave this group?',m:'You’ll stop seeing its plans and free times.',b:'Leave'}}else if(a=='leave2'){ui.sheet=null;await store.leave(D.id,S.uid);await store.saveUser(S.uid,{gl:(S.me.gl||[]).filter(x=>x.i!=D.id)})}
+else if(a=='invite'){ui.sheet={k:'inv',g:D.id};}
+else if(a=='invwa'||a=='invcp'||a=='invsh'){const g=ui.sheet&&ui.sheet.g||ui.gid,tx=`Join my group on Freehu so we can see when everyone’s free 👇\n${location.origin+location.pathname}?join=${g}\n(or enter code ${g} in the app)`;if(a=='invwa'){window.open('https://wa.me/?text='+encodeURIComponent(tx),'_blank','noopener');ui.sheet=null}else if(a=='invsh'){try{await navigator.share({text:tx})}catch(x){}}else{try{await navigator.clipboard.writeText(tx);toast('Invite copied 📋')}catch(x){toast(tx)}}return}
+else if(a=='copycode'){try{await navigator.clipboard.writeText(D.id);toast('Code '+D.id+' copied 📋')}catch(x){toast('Code: '+D.id)}return}
+else if(a=='newplan'){ui.pk_pd=ui.pk_ph=null;ui.sheet={k:'plan',t:D.t?+D.t:null}}
+else if(a=='mkp'){const pv=document.getElementById('pd').value,at=pv?wall(+pv.slice(0,4),+pv.slice(5,7)-1,+pv.slice(8,10),+document.getElementById('ph').value,gzo(S.G[ui.gid])):0;if(!at||at<Date.now()-36e5)return toast('Pick a future date');const id=rid(5);await store.setPlan(ui.gid,id,{t:document.getElementById('tt').value.trim()||TY[ui.type][0],e:TY[ui.type][1],pl:document.getElementById('tl').value.trim(),at,l:ui.plen,by:S.uid,r:{[S.uid]:'in'},ts:Date.now()});ui.sheet=null;ui.view='plans';toast('Plan created 🎉')}
+else if(a=='rsvp'){await store.rsvp(ui.gid,D.id,S.uid,D.v)}
+else if(a=='gsx')LS.set('fh_gs','1');
+else if(a=='nx')LS.set('fh_n','0');
+else if(a=='ping')ui.sheet={k:'ping'};
+else if(a=='pingsend'){await store.setMember(ui.gid,S.uid,{pg:{e:D.e,t:D.t,ts:Date.now()}});ui.sheet=null;toast('Sent. Replies show up here 🙌');return}
+else if(a=='pgr'){await store.setMember(ui.gid,S.uid,{['pr_'+D.u]:{r:D.r,ts:Date.now()}});toast(D.r=='in'?'You’re in 🎉':D.r=='later'?'Maybe later 👍':'No worries');return}
+else if(a=='gzset')ui.sheet={k:'gz'};else if(a=='savegz'){const z=document.getElementById('gzs').value;ui.sheet=null;await store.setGz(ui.gid,z);toast('Group time zone set ✓');return}
+else if(a=='note')ui.sheet={k:'note'};else if(a=='savenote'||a=='clrnote'){const n=a=='clrnote'?'':document.getElementById('nt').value.trim().slice(0,40);S.me.nt=n;ui.sheet=null;render();await store.saveUser(S.uid,{nt:n});await forG(g=>store.setMember(g,S.uid,{nt:n}));toast(n?'Note added':'Note cleared');return}
+else if(a=='wave'){await store.setMember(ui.gid,S.uid,{wv:{u:D.id,ts:Date.now()}});ui.sheet=null;toast('Waved 👋');return}
+else if(a=='delp'){ui.sheet={k:'cfm',a:'delp2',id:D.id,t:'Delete this plan?',m:'It will be removed for everyone in the group.',b:'Delete'}}else if(a=='delp2'){ui.sheet=null;await store.setPlan(ui.gid,D.id,null)}
+else if(a=='share'){const p=S.G[ui.gid].p[D.id],tx=`${p.e} ${p.t}, ${dg(S.G[ui.gid],planStart(p))} at ${clk(planStart(p),gzo(S.G[ui.gid]))} (${tzLbl(gzo(S.G[ui.gid]))} time)${p.pl?' @ '+p.pl:''}. Reply in the Freehu group (${ui.gid}).`;if(navigator.share){try{await navigator.share({text:tx})}catch(x){}}else{try{await navigator.clipboard.writeText(tx);toast('Copied 📋')}catch(x){toast(tx)}}return}
+else if(a=='ics'){const p=S.G[ui.gid].p[D.id],s=planStart(p),f=x=>new Date(x).toISOString().replace(/[-:]|\.\d+/g,''),txt=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Freehu//EN','BEGIN:VEVENT','UID:'+D.id+'@freehu','DTSTAMP:'+f(Date.now()),'DTSTART:'+f(s),'DTEND:'+f(s+p.l*36e5),'SUMMARY:'+p.e+' '+p.t,p.pl?'LOCATION:'+p.pl:'','BEGIN:VALARM','TRIGGER:-PT30M','ACTION:DISPLAY','DESCRIPTION:'+p.t,'END:VALARM','END:VEVENT','END:VCALENDAR'].filter(Boolean).join('\r\n'),u=URL.createObjectURL(new Blob([txt],{type:'text/calendar'})),l=document.createElement('a');l.href=u;l.download='freehu-plan.ics';l.click();setTimeout(()=>URL.revokeObjectURL(u),2000);return}
+else if(a=='theme'){const r=document.documentElement,d=r.dataset.theme?r.dataset.theme=='dark':matchMedia('(prefers-color-scheme:dark)').matches;r.dataset.theme=d?'light':'dark'}
+else return}catch(err){const c=err&&err.code||'';toast(c=='auth/unauthorized-domain'?'Add this site in Firebase › Authentication › Authorized domains':c=='auth/credential-already-in-use'?'That Google account already has a Freehu account. Sign out, then sign in with Google.':c=='auth/popup-closed-by-user'||c=='auth/cancelled-popup-request'?'Sign-in cancelled':c=='auth/popup-blocked'?'Allow pop-ups to sign in':c=='cal'?'Couldn’t read Google Calendar. Enable the Calendar API in Google Cloud.':'Something went wrong. Try again.')}
+render()});
+document.addEventListener('change',e=>{const f=e.target.classList.contains('pfile')&&e.target.files[0];if(!f)return;const im=new Image(),u=URL.createObjectURL(f);im.onload=()=>{const c=document.createElement('canvas');c.width=c.height=96;const s=Math.min(im.width,im.height);c.getContext('2d').drawImage(im,(im.width-s)/2,(im.height-s)/2,s,s,0,0,96,96);ui.ph=c.toDataURL('image/jpeg',.7);URL.revokeObjectURL(u);render()};im.src=u});
+addEventListener('keydown',e=>{if(e.key=='Escape'&&ui.sheet){ui.sheet=null;render()}});
+addEventListener('beforeinstallprompt',e=>{e.preventDefault();ip=e;render()});
+
+/* ---- installable app (manifest built at runtime) ---- */
+try{const ic="data:image/svg+xml,"+encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' fill='#5b4bdb'/><circle cx='32' cy='32' r='14' fill='none' stroke='white' stroke-width='5.5' stroke-linecap='round' stroke-dasharray='68 20'/><circle cx='32' cy='32' r='4.6' fill='white'/><circle cx='43.2' cy='23.6' r='4.4' fill='#22b35e'/></svg>");
+const l=document.createElement('link');l.rel='manifest';l.href=URL.createObjectURL(new Blob([JSON.stringify({name:'Freehu',short_name:'Freehu',start_url:location.origin+location.pathname,scope:location.origin+'/',display:'standalone',background_color:'#f6f5fb',theme_color:'#5b4bdb',icons:[{src:ic,sizes:'any',type:'image/svg+xml',purpose:'any maskable'}]})],{type:'application/manifest+json'}));document.head.appendChild(l)}catch(e){}
+
+/* ---- start ---- */
+try{const j=new URLSearchParams(location.search).get('join');if(j)LS.set('fh_j',j.slice(0,6).toUpperCase())}catch(e){}
+(async()=>{render();try{store=await fbStore(FIREBASE_CONFIG)}catch(e){console.error(e);document.getElementById('app').innerHTML='<main><div class="empty"><b>Can’t connect</b><p class="mut">Check your internet and the Firebase config, then reload.</p><p><small>Details: '+esc(e&&(e.code||e.message)||e)+'</small></p><p><small>Open this page from your real website (https), not from a preview or a file on your computer.</small></p></div></main>';return}
+store.onAuth(u=>{if(unsubU){unsubU();unsubU=null}if(!u){S.authed=false;S.uid=null;S.me=null;render();return}
+S.authed=true;S.uid=u.uid;S.anon=u.anon;
+unsubU=store.watchUser(u.uid,async d=>{if(!d){await store.saveUser(u.uid,{name:(u.name||'Me').split(' ')[0],emoji:AVS[Math.random()*AVS.length|0],av:[0,0,0,0,0,0,0],gl:[],s:'auto',u:0,tz:DEVTZ});ui.ob={step:0,picks:[]};render();return}
+S.me=d;if(!ui.ob&&!d.ob&&!(d.av||[]).some(x=>x)&&!(d.gl||[]).length)ui.ob={step:0,picks:[]};sync();render();autoJoin();if(!d.tz&&!S.tzs){S.tzs=1;saveTz(DEVTZ).catch(()=>{})}if(!S.hb){S.hb=1;beat()}})});
+setInterval(()=>beat(),6e5);setInterval(()=>{chk();remind();const a=document.activeElement;if(!a||a.tagName!='INPUT')render()},60000)})();
+</script>
+</body>
+</html>
